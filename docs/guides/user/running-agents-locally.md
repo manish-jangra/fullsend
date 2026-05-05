@@ -134,6 +134,20 @@ fullsend run fix \
   --env-file /tmp/fullsend.env
 ```
 
+## Testing without side effects
+
+To run agent inference without the post-script (which posts PR comments, pushes branches, or creates PRs), use `--no-post-script`:
+
+```bash
+fullsend run review \
+  --fullsend-dir /tmp/fullsend-dot \
+  --target-repo /path/to/repo \
+  --env-file /tmp/fullsend.env \
+  --no-post-script
+```
+
+The agent runs normally inside the sandbox, but the post-script is skipped. This means `PUSH_TOKEN` and `REVIEW_TOKEN` are not needed in your env file — only the core variables (`GH_TOKEN`, GCP credentials) are required.
+
 ## Cross-platform binary resolution
 
 The pre-agent security scan runs `fullsend scan context` inside the Linux sandbox. This requires a Linux binary, even when your host is macOS.
