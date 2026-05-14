@@ -18,8 +18,8 @@ const (
 	// SandboxClaudeConfig is the Claude config directory inside the sandbox.
 	SandboxClaudeConfig = "/tmp/claude-config" //nolint:gosec // not a credential
 
-	createTimeout   = 125 * time.Second
-	readyTimeout    = 120 * time.Second
+	createTimeout   = 65 * time.Second
+	readyTimeout    = 60 * time.Second
 	readyPoll       = 2 * time.Second
 	transferTimeout = 5 * time.Minute
 )
@@ -135,10 +135,10 @@ func EnsureAvailable() error {
 	return nil
 }
 
-// EnsureGateway verifies that an openshell gateway is already running.
+// CheckGateway verifies that an openshell gateway is already running.
 // The gateway must be started externally (e.g. in CI via the action.yml steps)
 // before invoking fullsend run.
-func EnsureGateway() error {
+func CheckGateway() error {
 	check := exec.Command("openshell", "gateway", "list")
 	if err := check.Run(); err != nil {
 		return fmt.Errorf("no openshell gateway running — start openshell-gateway before running fullsend")

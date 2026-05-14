@@ -186,12 +186,11 @@ runs:
         GATEWAY_LOG="${GITHUB_WORKSPACE}/output/openshell-gateway.log"
         mkdir -p "${GITHUB_WORKSPACE}/output"
 
-        HANDSHAKE_SECRET="ci-$(python3 -c 'import secrets; print(secrets.token_hex(16))')"
+        export OPENSHELL_SSH_HANDSHAKE_SECRET="ci-$(python3 -c 'import secrets; print(secrets.token_hex(16))')"
 
         "${RUNNER_TEMP}/fullsend/openshell-gateway" \
           --bind-address 0.0.0.0 \
           --health-port 8081 \
-          --ssh-handshake-secret "${HANDSHAKE_SECRET}" \
           --drivers podman \
           --disable-tls \
           --db-url "sqlite:/tmp/gateway.db?mode=rwc" \
@@ -204,18 +203,8 @@ runs:
         done
         curl -sf http://127.0.0.1:8081/healthz >/dev/null 2>&1 || { echo "::error::Gateway health check failed"; exit 1; }
 
-        CONFIG_DIR="${HOME}/.config/openshell"
-        mkdir -p "${CONFIG_DIR}/gateways/ci-gateway"
-        cat > "${CONFIG_DIR}/gateways/ci-gateway/metadata.json" <<'GWEOF'
-        {
-          "name": "ci-gateway",
-          "gateway_endpoint": "http://127.0.0.1:8080",
-          "is_remote": false,
-          "gateway_port": 8080,
-          "auth_mode": "plaintext"
-        }
-        GWEOF
-        printf 'ci-gateway' > "${CONFIG_DIR}/active_gateway"
+        openshell gateway add http://127.0.0.1:8080 --local --name local
+        openshell gateway select local
 
     - name: Install validation dependencies
       shell: bash

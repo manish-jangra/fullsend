@@ -193,14 +193,13 @@ func runAgent(agentName, fullsendDir, outputBase, targetRepo, fullsendBinary str
 	}
 	printer.StepDone(fmt.Sprintf("openshell available (%.1fs)", time.Since(openshellStart).Seconds()))
 
-	// 2a. Ensure a gateway is running.
-	gatewayStart := time.Now()
-	printer.StepStart("Ensuring gateway")
-	if err := sandbox.EnsureGateway(); err != nil {
+	// 2a. Check that a gateway is running.
+	printer.StepStart("Checking gateway")
+	if err := sandbox.CheckGateway(); err != nil {
 		printer.StepFail("Gateway not running")
-		return fmt.Errorf("starting gateway: %w", err)
+		return fmt.Errorf("gateway check failed: %w", err)
 	}
-	printer.StepDone(fmt.Sprintf("Gateway ready (%.1fs)", time.Since(gatewayStart).Seconds()))
+	printer.StepDone("Gateway available")
 
 	// 2b. Ensure providers exist on the gateway (if any declared).
 	if len(h.Providers) > 0 {
