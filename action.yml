@@ -187,6 +187,8 @@ runs:
         mkdir -p "${GITHUB_WORKSPACE}/output"
 
         export OPENSHELL_SSH_HANDSHAKE_SECRET="ci-$(python3 -c 'import secrets; print(secrets.token_hex(16))')"
+        # TODO: check if a --podman-supervisor-image flag exists in newer gateway releases
+        export OPENSHELL_SUPERVISOR_IMAGE="ghcr.io/nvidia/openshell/supervisor:dev"
 
         "${RUNNER_TEMP}/fullsend/openshell-gateway" \
           --bind-address 0.0.0.0 \
