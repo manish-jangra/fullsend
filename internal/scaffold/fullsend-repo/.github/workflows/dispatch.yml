@@ -114,7 +114,7 @@ jobs:
                 *)
                   # Non-command issue_comment: auto-triage on needs-info issues
                   # when commenter is a non-bot with association != NONE or is issue author
-                  if has_label "needs-info" && ! has_label "type/feature"; then
+                  if has_label "needs-info" && ! has_label "feature"; then
                     if [[ "${COMMENT_USER_TYPE}" != "Bot" ]]; then
                       if [[ "${COMMENT_AUTHOR_ASSOC}" != "NONE" ]] || is_issue_author; then
                         STAGE="triage"
