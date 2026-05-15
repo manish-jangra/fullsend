@@ -10,11 +10,23 @@ For agent-specific customization using skills, see
 
 ## What to put in CLAUDE.md
 
-`CLAUDE.md` is the simplest way to customize agent behavior. Add instructions
-that apply to anyone (human or agent) working in your repo:
+The recommended approach is to put agent instructions in an `AGENTS.md` file
+and have your `CLAUDE.md` include it:
 
 ```markdown
 # CLAUDE.md
+
+See AGENTS.md for contributor conventions (human and agent alike).
+```
+
+This keeps `CLAUDE.md` lightweight and makes your conventions portable across
+agent runtimes. `AGENTS.md` is the
+[open standard](https://agentskills.org/) that any agent tool can discover.
+
+Add instructions that apply to anyone (human or agent) working in your repo:
+
+```markdown
+# AGENTS.md
 
 ## Testing
 - Always run `make test` before committing.
@@ -80,11 +92,13 @@ Your repo has a complex domain model and triage often miscategorizes issues:
 
 ## What not to do
 
-- **Don't put secrets in CLAUDE.md.** It's committed to your repo. Use
-  environment variables for anything sensitive.
 - **Don't write agent-specific instructions.** All agents read the same
   `CLAUDE.md`, so write instructions as if they're for any contributor.
   This is a feature — the same conventions apply to humans and agents alike.
 - **Don't put label glossaries or skill-specific knowledge here.** That
   bloats context for every agent. Use
   [skills](customizing-with-skills.md) instead.
+- **Don't make AGENTS.md a monolith.** Use progressive disclosure — put
+  detailed context in the package directory where it's relevant rather than
+  loading every agent with everything. For example, database migration
+  review checklists belong in `db/migrations/AGENTS.md`, not the root file.

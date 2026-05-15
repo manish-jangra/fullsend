@@ -16,11 +16,23 @@ structured instructions. The agent loads the skill by name and follows its
 instructions during execution.
 
 ```
-.claude/skills/my-skill/
+.agents/skills/my-skill/
   SKILL.md           # skill definition (required)
-  helper-script.sh   # supporting scripts (optional)
-  data.json          # reference data (optional)
+  scripts/           # supporting scripts (optional)
+    helper-script.sh
+  references/        # reference data (optional)
+    data.json
 ```
+
+For portability across agent runtimes, store skills in `.agents/skills/` and
+symlink `.claude/skills` to it:
+
+```bash
+ln -s ../.agents/skills .claude/skills
+```
+
+This way, skills are discoverable by fullsend's agent runtime and by any local
+agent tooling developers use when working on the repo directly.
 
 The `SKILL.md` has frontmatter declaring the skill's name and description,
 followed by step-by-step instructions:
@@ -50,17 +62,20 @@ giving agents the ability to dynamically gather information at runtime.
 
 ## Adding skills to your repository
 
-Place skills in `.claude/skills/` in your target repository. All agents
-operating on your repo will discover them automatically:
+Place skills in `.agents/skills/` in your target repository and symlink
+`.claude/skills` to `.agents/skills`. All agents operating on your repo will
+discover them automatically:
 
 ```
 your-repo/
-  .claude/skills/
+  .agents/skills/
     customer-research/
       SKILL.md
-      query-salesforce.sh
+      scripts/
+        query-salesforce.sh
     deployment-checks/
       SKILL.md
+  .claude/skills -> ../.agents/skills
 ```
 
 ## Skill shadowing
