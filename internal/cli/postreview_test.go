@@ -707,7 +707,7 @@ func TestFindingsToReviewComments(t *testing.T) {
 		{File: "c.go", Line: 20, Severity: "critical", Category: "security", Description: "Desc C", Remediation: "Fix it"},
 	}
 
-	comments := findingsToReviewComments(findings)
+	comments := findingsToReviewComments(findings, nil)
 	require.Len(t, comments, 2)
 
 	assert.Equal(t, "a.go", comments[0].Path)
@@ -719,6 +719,23 @@ func TestFindingsToReviewComments(t *testing.T) {
 	assert.Equal(t, 20, comments[1].Line)
 	assert.Contains(t, comments[1].Body, "critical")
 	assert.Contains(t, comments[1].Body, "Fix it")
+}
+
+func TestFindingsToReviewComments_FiltersByDiffFiles(t *testing.T) {
+	findings := []ReviewFinding{
+		{File: "changed.go", Line: 10, Severity: "high", Category: "bug", Description: "In diff"},
+		{File: "not-changed.go", Line: 5, Severity: "low", Category: "docs", Description: "Not in diff"},
+		{File: "also-changed.go", Line: 20, Severity: "medium", Category: "style", Description: "Also in diff"},
+	}
+	diffFiles := map[string]bool{
+		"changed.go":      true,
+		"also-changed.go": true,
+	}
+
+	comments := findingsToReviewComments(findings, diffFiles)
+	require.Len(t, comments, 2)
+	assert.Equal(t, "changed.go", comments[0].Path)
+	assert.Equal(t, "also-changed.go", comments[1].Path)
 }
 
 func TestFormatFindingComment(t *testing.T) {

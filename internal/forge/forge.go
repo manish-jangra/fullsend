@@ -211,6 +211,7 @@ type Client interface {
 
 	// Pull request operations
 	GetPullRequestHeadSHA(ctx context.Context, owner, repo string, number int) (string, error)
+	ListPullRequestFiles(ctx context.Context, owner, repo string, number int) ([]string, error)
 
 	// Pull request review operations.
 	// commitSHA, when non-empty, pins the review to a specific commit.

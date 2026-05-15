@@ -300,7 +300,17 @@ func submitFormalReview(ctx context.Context, client forge.Client, owner, repo st
 		return nil
 	}
 
-	inlineComments := findingsToReviewComments(findings)
+	var diffFiles map[string]bool
+	if prFiles, err := client.ListPullRequestFiles(ctx, owner, repo, pr); err != nil {
+		printer.StepInfo("Could not list PR files, inline comments may be rejected")
+	} else if len(prFiles) > 0 {
+		diffFiles = make(map[string]bool, len(prFiles))
+		for _, f := range prFiles {
+			diffFiles[f] = true
+		}
+	}
+
+	inlineComments := findingsToReviewComments(findings, diffFiles)
 
 	var reviewBody string
 	if event == "REQUEST_CHANGES" {
@@ -324,10 +334,15 @@ func submitFormalReview(ctx context.Context, client forge.Client, owner, repo st
 // findingsToReviewComments converts review findings with file and line
 // locations into inline review comments. Findings without a file path
 // or line number are omitted — they remain in the sticky comment body.
-func findingsToReviewComments(findings []ReviewFinding) []forge.ReviewComment {
+// When diffFiles is non-nil, findings referencing files outside the PR
+// diff are also omitted to avoid GitHub 422 errors.
+func findingsToReviewComments(findings []ReviewFinding, diffFiles map[string]bool) []forge.ReviewComment {
 	var comments []forge.ReviewComment
 	for _, f := range findings {
 		if f.File == "" || f.Line <= 0 {
+			continue
+		}
+		if diffFiles != nil && !diffFiles[f.File] {
 			continue
 		}
 		comments = append(comments, forge.ReviewComment{
