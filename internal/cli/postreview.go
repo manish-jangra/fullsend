@@ -302,7 +302,7 @@ func submitFormalReview(ctx context.Context, client forge.Client, owner, repo st
 
 	var diffFiles map[string]bool
 	if prFiles, err := client.ListPullRequestFiles(ctx, owner, repo, pr); err != nil {
-		printer.StepInfo("Could not list PR files, inline comments may be rejected")
+		printer.StepInfo(fmt.Sprintf("Could not list PR files (%v), inline comments may be rejected", err))
 	} else if len(prFiles) > 0 {
 		diffFiles = make(map[string]bool, len(prFiles))
 		for _, f := range prFiles {
