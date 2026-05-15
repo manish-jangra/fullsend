@@ -1,7 +1,8 @@
-#!/usr/bin/env bash
+#!/bin/bash
 # Lint: every OOTB harness YAML must have a doc: field pointing to an existing file.
 # Also checks that docs/agents/README.md links to every agent doc.
 set -euo pipefail
+shopt -s nullglob
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 HARNESS_DIR="$REPO_ROOT/internal/scaffold/fullsend-repo/harness"
@@ -47,7 +48,7 @@ else
             continue
         fi
         doc_basename="$(basename "$doc_value")"
-        if ! grep -q "$doc_basename" "$AGENTS_README"; then
+        if ! grep -qF "($doc_basename)" "$AGENTS_README"; then
             echo "  ERROR: docs/agents/README.md does not link to $doc_basename (from $name.yaml)"
             errors=$((errors + 1))
         else
