@@ -72,9 +72,11 @@ type GCFClient interface {
 	GetSecret(ctx context.Context, projectID, secretID string) error
 	CreateSecret(ctx context.Context, projectID, secretID string) error
 	AddSecretVersion(ctx context.Context, projectID, secretID string, data []byte) error
+	AccessSecretVersion(ctx context.Context, projectID, secretID string) ([]byte, error)
 
-	// IAM binding (Secret Manager resources)
+	// IAM bindings
 	SetSecretIAMBinding(ctx context.Context, resource, member, role string) error
+	SetProjectIAMBinding(ctx context.Context, projectID, member, role string) error
 
 	// Cloud Run IAM (for function invoker policy)
 	SetCloudRunInvoker(ctx context.Context, projectID, region, serviceName string) error
@@ -84,6 +86,7 @@ type GCFClient interface {
 	UploadFunctionSource(ctx context.Context, projectID, region string, sourceZip []byte) (storageSource json.RawMessage, err error)
 	CreateFunction(ctx context.Context, projectID, region, functionName string, cfg FunctionConfig) (string, error)
 	UpdateFunction(ctx context.Context, projectID, region, functionName string, cfg FunctionConfig) (string, error)
+	UpdateFunctionEnvVars(ctx context.Context, projectID, region, functionName string, envVars map[string]string) (string, error)
 	WaitForOperation(ctx context.Context, operationName string) error
 
 	// Project number lookup
@@ -204,6 +207,9 @@ func (c *LiveGCFClient) CreateWIFProvider(ctx context.Context, projectNumber, po
 
 	if resp.StatusCode == http.StatusConflict {
 		io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
+		if err := c.undeleteWIFProvider(ctx, projectNumber, poolID, providerID); err == nil {
+			return c.UpdateWIFProvider(ctx, projectNumber, poolID, providerID, cfg)
+		}
 		return c.UpdateWIFProvider(ctx, projectNumber, poolID, providerID, cfg)
 	}
 	if resp.StatusCode != http.StatusOK {
@@ -288,6 +294,27 @@ func (c *LiveGCFClient) UpdateWIFProvider(ctx context.Context, projectNumber, po
 	return nil
 }
 
+// undeleteWIFProvider restores a soft-deleted WIF provider.
+// GCP WIF providers are soft-deleted with a 30-day grace period; creating a
+// provider with the same ID during this window returns 409. Undeleting first
+// allows the subsequent update to succeed.
+func (c *LiveGCFClient) undeleteWIFProvider(ctx context.Context, projectNumber, poolID, providerID string) error {
+	reqURL := fmt.Sprintf("https://iam.googleapis.com/v1/projects/%s/locations/global/workloadIdentityPools/%s/providers/%s:undelete",
+		url.PathEscape(projectNumber), url.PathEscape(poolID), url.PathEscape(providerID))
+
+	resp, err := c.Client.DoRequest(ctx, http.MethodPost, reqURL, "{}")
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
+		return fmt.Errorf("undelete returned %d", resp.StatusCode)
+	}
+	return c.waitForIAMOperation(ctx, resp.Body)
+}
+
 // GetSecret checks that a Secret Manager secret exists.
 func (c *LiveGCFClient) GetSecret(ctx context.Context, projectID, secretID string) error {
 	reqURL := fmt.Sprintf("https://secretmanager.googleapis.com/v1/projects/%s/secrets/%s",
@@ -359,6 +386,46 @@ func (c *LiveGCFClient) AddSecretVersion(ctx context.Context, projectID, secretI
 	return nil
 }
 
+// AccessSecretVersion reads the latest version of a Secret Manager secret.
+func (c *LiveGCFClient) AccessSecretVersion(ctx context.Context, projectID, secretID string) ([]byte, error) {
+	reqURL := fmt.Sprintf("https://secretmanager.googleapis.com/v1/projects/%s/secrets/%s/versions/latest:access",
+		url.PathEscape(projectID), url.PathEscape(secretID))
+
+	resp, err := c.Client.DoRequest(ctx, http.MethodGet, reqURL, "")
+	if err != nil {
+		return nil, fmt.Errorf("accessing secret version: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusNotFound {
+		return nil, fmt.Errorf("secret %s: %w", secretID, ErrSecretNotFound)
+	}
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+		return nil, fmt.Errorf("unexpected status %d accessing secret version: %s", resp.StatusCode, gcp.ExtractErrorMessage(body))
+	}
+
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if err != nil {
+		return nil, fmt.Errorf("reading secret version response: %w", err)
+	}
+
+	var result struct {
+		Payload struct {
+			Data string `json:"data"`
+		} `json:"payload"`
+	}
+	if err := json.Unmarshal(body, &result); err != nil {
+		return nil, fmt.Errorf("parsing secret version response: %w", err)
+	}
+
+	data, err := base64.StdEncoding.DecodeString(result.Payload.Data)
+	if err != nil {
+		return nil, fmt.Errorf("decoding secret payload: %w", err)
+	}
+	return data, nil
+}
+
 // SetSecretIAMBinding sets an IAM binding on a Secret Manager resource.
 // Uses read-modify-write with retry on 409 Conflict (etag mismatch).
 func (c *LiveGCFClient) SetSecretIAMBinding(ctx context.Context, resource, member, role string) error {
@@ -370,7 +437,7 @@ func (c *LiveGCFClient) SetSecretIAMBinding(ctx context.Context, resource, membe
 	setURL := fmt.Sprintf("https://secretmanager.googleapis.com/v1/%s:setIamPolicy", resource)
 
 	for attempt := range maxRetries {
-		err := c.trySetIAMBinding(ctx, getURL, setURL, member, role)
+		err := c.trySetIAMBinding(ctx, http.MethodGet, "", getURL, setURL, member, role)
 		if err == nil {
 			return nil
 		}
@@ -386,8 +453,48 @@ func (c *LiveGCFClient) SetSecretIAMBinding(ctx context.Context, resource, membe
 	return fmt.Errorf("IAM policy update failed after %d retries", maxRetries)
 }
 
-func (c *LiveGCFClient) trySetIAMBinding(ctx context.Context, getURL, setURL, member, role string) error {
-	resp, err := c.Client.DoRequest(ctx, http.MethodGet, getURL, "")
+type conflictError struct{ status int }
+
+func (e *conflictError) Error() string {
+	return fmt.Sprintf("IAM policy conflict (status %d)", e.status)
+}
+
+func isConflict(err error) bool {
+	var ce *conflictError
+	return errors.As(err, &ce)
+}
+
+// SetProjectIAMBinding sets an IAM binding on a GCP project.
+// Uses read-modify-write with retry on 409 Conflict (etag mismatch).
+func (c *LiveGCFClient) SetProjectIAMBinding(ctx context.Context, projectID, member, role string) error {
+	const maxRetries = 3
+	getURL := fmt.Sprintf("https://cloudresourcemanager.googleapis.com/v1/projects/%s:getIamPolicy",
+		url.PathEscape(projectID))
+	setURL := fmt.Sprintf("https://cloudresourcemanager.googleapis.com/v1/projects/%s:setIamPolicy",
+		url.PathEscape(projectID))
+
+	for attempt := range maxRetries {
+		err := c.trySetIAMBinding(ctx, http.MethodPost, "{}", getURL, setURL, member, role)
+		if err == nil {
+			return nil
+		}
+		if !isConflict(err) || attempt == maxRetries-1 {
+			return err
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(time.Duration(200*(attempt+1)) * time.Millisecond):
+		}
+	}
+	return fmt.Errorf("project IAM policy update failed after %d retries", maxRetries)
+}
+
+// trySetIAMBinding performs a single read-modify-write IAM policy update.
+// getMethod/getBody control the getIamPolicy request (GET+"" for Secret Manager,
+// POST+"{}" for Cloud Resource Manager). setIamPolicy always uses POST.
+func (c *LiveGCFClient) trySetIAMBinding(ctx context.Context, getMethod, getBody, getURL, setURL, member, role string) error {
+	resp, err := c.Client.DoRequest(ctx, getMethod, getURL, getBody)
 	if err != nil {
 		return fmt.Errorf("getting IAM policy: %w", err)
 	}
@@ -454,17 +561,6 @@ func (c *LiveGCFClient) trySetIAMBinding(ctx context.Context, getURL, setURL, me
 		return fmt.Errorf("unexpected status %d setting IAM policy: %s", setResp.StatusCode, gcp.ExtractErrorMessage(body))
 	}
 	return nil
-}
-
-type conflictError struct{ status int }
-
-func (e *conflictError) Error() string {
-	return fmt.Sprintf("IAM policy conflict (status %d)", e.status)
-}
-
-func isConflict(err error) bool {
-	var ce *conflictError
-	return errors.As(err, &ce)
 }
 
 // SetCloudRunInvoker ensures allUsers has roles/run.invoker on the Cloud Run
@@ -769,6 +865,49 @@ func (c *LiveGCFClient) UpdateFunction(ctx context.Context, projectID, region, f
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
 		return "", fmt.Errorf("decoding update function response: %w", err)
+	}
+
+	return result.Name, nil
+}
+
+// UpdateFunctionEnvVars updates only the environment variables of a Cloud
+// Function v2, leaving build config and other service config untouched.
+func (c *LiveGCFClient) UpdateFunctionEnvVars(ctx context.Context, projectID, region, functionName string, envVars map[string]string) (string, error) {
+	reqURL := fmt.Sprintf("https://cloudfunctions.googleapis.com/v2/projects/%s/locations/%s/functions/%s?updateMask=%s",
+		url.PathEscape(projectID), url.PathEscape(region), url.PathEscape(functionName),
+		url.QueryEscape("serviceConfig.environmentVariables"))
+
+	resourceName := fmt.Sprintf("projects/%s/locations/%s/functions/%s",
+		projectID, region, functionName)
+
+	payloadObj := map[string]interface{}{
+		"name": resourceName,
+		"serviceConfig": map[string]interface{}{
+			"environmentVariables": envVars,
+		},
+	}
+
+	payloadBytes, err := json.Marshal(payloadObj)
+	if err != nil {
+		return "", fmt.Errorf("marshaling env vars update payload: %w", err)
+	}
+
+	resp, err := c.Client.DoRequest(ctx, http.MethodPatch, reqURL, string(payloadBytes))
+	if err != nil {
+		return "", fmt.Errorf("updating function env vars: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+		return "", fmt.Errorf("unexpected status %d updating function env vars: %s", resp.StatusCode, gcp.ExtractErrorMessage(body))
+	}
+
+	var result struct {
+		Name string `json:"name"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return "", fmt.Errorf("decoding env vars update response: %w", err)
 	}
 
 	return result.Name, nil

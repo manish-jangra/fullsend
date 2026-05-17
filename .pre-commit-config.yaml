@@ -7,7 +7,7 @@ repos:
       - id: end-of-file-fixer
       - id: trailing-whitespace
       - id: detect-private-key
-        exclude: "internal/layers/secrets_test\\.go$|internal/security/scanner_test\\.go$|tests/.*test_.*\\.py$"
+        exclude: "internal/layers/secrets_test\\.go$|internal/security/scanner_test\\.go$|internal/dispatch/gcf/provisioner_test\\.go$|tests/.*test_.*\\.py$"
       - id: check-added-large-files
         args: ["--maxkb=1000"]
       - id: check-merge-conflict
@@ -47,6 +47,7 @@ repos:
     rev: v1.7.11
     hooks:
       - id: actionlint
+        args: ["-ignore", "unexpected key \"queue\" for \"concurrency\""]
 
   - repo: local
     hooks:

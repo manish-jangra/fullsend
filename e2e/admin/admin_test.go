@@ -163,7 +163,7 @@ func TestAdminInstallUninstall(t *testing.T) {
 	// =========================================
 	// Phase 2.5: Triage dispatch smoke test
 	// =========================================
-	if os.Getenv("E2E_HALFSEND_VERTEX_KEY") != "" {
+	if os.Getenv("E2E_HALFSEND_WIF_PROVIDER") != "" {
 		t.Log("=== Phase 2.5: Triage Dispatch Smoke Test ===")
 		vendorBinaryForE2E(t, env)
 		runTriageDispatchSmokeTest(t, env)
@@ -233,7 +233,7 @@ func runFullInstall(t *testing.T, env *e2eEnv) ([]layers.AgentCredentials, *conf
 
 			t.Logf("Attempt %d/%d for role %s failed: %v", attempt, maxAttempts, role, runErr)
 			if attempt < maxAttempts {
-				slug := appsetup.AppSlug(role)
+				slug := appsetup.AppSlug(appsetup.DefaultAppSet, role)
 				t.Logf("Cleaning up potentially stale app %s before retry", slug)
 				if delErr := deleteAppViaPlaywright(env.page, slug, t.Logf, env.screenshotDir); delErr != nil {
 					t.Logf("Warning: cleanup of %s failed (may not exist): %v", slug, delErr)
@@ -271,29 +271,27 @@ func runFullInstall(t *testing.T, env *e2eEnv) ([]layers.AgentCredentials, *conf
 		agents[i] = ac.AgentEntry
 	}
 
-	// Build inference provider if vertex key is available (mode 3).
+	// Build inference provider if WIF provider is available.
 	var inferenceProvider inference.Provider
 	var inferenceProviderName string
-	if vertexKey := os.Getenv("E2E_HALFSEND_VERTEX_KEY"); vertexKey != "" {
+	if wifProvider := os.Getenv("E2E_HALFSEND_WIF_PROVIDER"); wifProvider != "" {
 		gcpProjectID := os.Getenv("E2E_GCP_PROJECT_ID")
 		if gcpProjectID == "" {
-			// Try to extract project_id from the key JSON.
-			gcpProjectID = extractProjectID(t, vertexKey)
+			t.Fatal("E2E_GCP_PROJECT_ID is required when E2E_HALFSEND_WIF_PROVIDER is set")
 		}
 		gcpRegion := os.Getenv("E2E_GCP_REGION")
 		if gcpRegion == "" {
 			gcpRegion = "global"
 		}
 		inferenceProvider = vertex.New(vertex.Config{
-			ProjectID:      gcpProjectID,
-			Region:         gcpRegion,
-			CredentialJSON: []byte(vertexKey),
-		}, nil)
-		// Region is stored as a variable, not a secret.
+			ProjectID:   gcpProjectID,
+			Region:      gcpRegion,
+			WIFProvider: wifProvider,
+		})
 		inferenceProviderName = "vertex"
 		t.Logf("Inference provider: vertex (project: %s)", gcpProjectID)
 	} else {
-		t.Log("E2E_HALFSEND_VERTEX_KEY not set, skipping inference layer")
+		t.Log("E2E_HALFSEND_WIF_PROVIDER not set, skipping inference layer")
 	}
 
 	orgCfg := config.NewOrgConfig(repoNames, enabledRepos, defaultRoles, agents, inferenceProviderName)
@@ -316,7 +314,7 @@ func runFullInstall(t *testing.T, env *e2eEnv) ([]layers.AgentCredentials, *conf
 	require.NoError(t, err, "pre-installing config-repo layer")
 	registerRepoCleanup(t, env.client, testOrg, forge.ConfigRepoName)
 
-	workflowsLayer := layers.NewWorkflowsLayer(testOrg, env.client, env.printer, user, "")
+	workflowsLayer := layers.NewWorkflowsLayer(testOrg, env.client, env.printer, user)
 	err = workflowsLayer.Install(ctx)
 	require.NoError(t, err, "pre-installing workflows layer")
 
@@ -335,7 +333,7 @@ func runUninstall(t *testing.T, env *e2eEnv) {
 	emptyCfg := config.NewOrgConfig(nil, nil, nil, nil, "")
 	stack := layers.NewStack(
 		layers.NewConfigRepoLayer(testOrg, env.client, emptyCfg, env.printer, false),
-		layers.NewWorkflowsLayer(testOrg, env.client, env.printer, "", ""),
+		layers.NewWorkflowsLayer(testOrg, env.client, env.printer, ""),
 		layers.NewSecretsLayer(testOrg, env.client, nil, env.printer),
 		layers.NewInferenceLayer(testOrg, env.client, nil, env.printer),
 		layers.NewBothModesDispatchLayer(testOrg, env.client, &e2eDispatcher{}, env.printer),
@@ -352,7 +350,7 @@ func runUninstallAllowNotFound(t *testing.T, env *e2eEnv) {
 	emptyCfg := config.NewOrgConfig(nil, nil, nil, nil, "")
 	stack := layers.NewStack(
 		layers.NewConfigRepoLayer(testOrg, env.client, emptyCfg, env.printer, false),
-		layers.NewWorkflowsLayer(testOrg, env.client, env.printer, "", ""),
+		layers.NewWorkflowsLayer(testOrg, env.client, env.printer, ""),
 		layers.NewSecretsLayer(testOrg, env.client, nil, env.printer),
 		layers.NewInferenceLayer(testOrg, env.client, nil, env.printer),
 		layers.NewBothModesDispatchLayer(testOrg, env.client, &e2eDispatcher{}, env.printer),
@@ -387,38 +385,26 @@ func verifyInstalled(t *testing.T, env *e2eEnv, orgCfg *config.OrgConfig, enable
 	assert.Len(t, parsedCfg.Agents, len(defaultRoles))
 
 	// Agent runtime files exist (from scaffold).
+	// ADR 35: only non-layered, non-upstream-only files are installed.
+	// Layered dirs (agents/, skills/, schemas/, harness/, policies/, scripts/,
+	// env/) and upstream-only dirs (.github/actions/, .github/scripts/) are
+	// provided at runtime via sparse checkout in reusable workflows.
 	for _, path := range []string{
 		".github/workflows/triage.yml",
 		".github/workflows/code.yml",
 		".github/workflows/review.yml",
-		".github/workflows/repo-maintenance.yml",
-		".github/actions/fullsend/action.yml",
-		".github/scripts/setup-agent-env.sh",
-		"agents/triage.md",
-		"agents/code.md",
-		"harness/triage.yaml",
-		"harness/code.yaml",
-		"policies/triage.yaml",
-		"policies/code.yaml",
-		"env/triage.env",
-		"env/code-agent.env",
-		"env/gcp-vertex.env",
-		"scripts/scan-secrets",
-		"scripts/pre-code.sh",
-		"scripts/post-code.sh",
-		"scripts/post-triage.sh",
-		"scripts/reconcile-repos.sh",
-		"skills/code-implementation/SKILL.md",
-		"skills/fix-review/SKILL.md",
 		".github/workflows/fix.yml",
-		"agents/fix.md",
-		"harness/fix.yaml",
-		"policies/fix.yaml",
-		"env/fix-agent.env",
-		"schemas/fix-result.schema.json",
-		"scripts/pre-fix.sh",
-		"scripts/post-fix.sh",
-		"scripts/process-fix-result.py",
+		".github/workflows/dispatch.yml",
+		".github/workflows/repo-maintenance.yml",
+		".github/workflows/prioritize.yml",
+		".github/workflows/prioritize-scheduler.yml",
+		"customized/agents/.gitkeep",
+		"customized/skills/.gitkeep",
+		"customized/schemas/.gitkeep",
+		"customized/harness/.gitkeep",
+		"customized/policies/.gitkeep",
+		"customized/scripts/.gitkeep",
+		"customized/env/.gitkeep",
 		"templates/shim-workflow-call.yaml",
 		"CODEOWNERS",
 	} {
@@ -439,9 +425,9 @@ func verifyInstalled(t *testing.T, env *e2eEnv, orgCfg *config.OrgConfig, enable
 		assert.True(t, exists, "variable %s should exist", varName)
 	}
 
-	// Inference secrets exist if vertex key was provided.
-	if os.Getenv("E2E_HALFSEND_VERTEX_KEY") != "" {
-		for _, secretName := range []string{"FULLSEND_GCP_SA_KEY_JSON", "FULLSEND_GCP_PROJECT_ID"} {
+	// Inference secrets exist if WIF provider was configured.
+	if os.Getenv("E2E_HALFSEND_WIF_PROVIDER") != "" {
+		for _, secretName := range []string{"FULLSEND_GCP_WIF_PROVIDER", "FULLSEND_GCP_PROJECT_ID"} {
 			exists, secErr := env.client.RepoSecretExists(ctx, testOrg, forge.ConfigRepoName, secretName)
 			assert.NoError(t, secErr, "checking inference secret %s", secretName)
 			assert.True(t, exists, "inference secret %s should exist", secretName)
@@ -516,7 +502,7 @@ func verifyNotInstalled(t *testing.T, env *e2eEnv) {
 	emptyCfg := config.NewOrgConfig(nil, nil, nil, nil, "")
 	stack := layers.NewStack(
 		layers.NewConfigRepoLayer(testOrg, env.client, emptyCfg, env.printer, false),
-		layers.NewWorkflowsLayer(testOrg, env.client, env.printer, "", ""),
+		layers.NewWorkflowsLayer(testOrg, env.client, env.printer, ""),
 		layers.NewSecretsLayer(testOrg, env.client, nil, env.printer),
 		layers.NewInferenceLayer(testOrg, env.client, nil, env.printer),
 		layers.NewBothModesDispatchLayer(testOrg, env.client, &e2eDispatcher{}, env.printer),
@@ -834,7 +820,7 @@ func buildTestLayerStack(
 ) *layers.Stack {
 	return layers.NewStack(
 		layers.NewConfigRepoLayer(org, client, cfg, printer, hasPrivate),
-		layers.NewWorkflowsLayer(org, client, printer, user, ""),
+		layers.NewWorkflowsLayer(org, client, printer, user),
 		layers.NewSecretsLayer(org, client, agentCreds, printer).WithOIDCMode(),
 		layers.NewInferenceLayer(org, client, inferenceProvider, printer),
 		layers.NewOIDCDispatchLayer(org, client, enrolledRepoIDs, &e2eDispatcher{}, printer),
@@ -857,22 +843,4 @@ func hasPrivateRepos(repos []forge.Repository) bool {
 		}
 	}
 	return false
-}
-
-// extractProjectID attempts to extract project_id from a GCP service account
-// key JSON string. Falls back to "unknown" if parsing fails.
-func extractProjectID(t *testing.T, keyJSON string) string {
-	t.Helper()
-	var key struct {
-		ProjectID string `json:"project_id"`
-	}
-	if err := json.Unmarshal([]byte(keyJSON), &key); err != nil {
-		t.Logf("warning: could not parse project_id from vertex key: %v", err)
-		return "unknown"
-	}
-	if key.ProjectID == "" {
-		t.Log("warning: vertex key has empty project_id")
-		return "unknown"
-	}
-	return key.ProjectID
 }

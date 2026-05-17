@@ -16,6 +16,7 @@ func NewFakeClient() *FakeClient {
 		WorkflowRuns:   make(map[string]*WorkflowRun),
 		Secrets:        make(map[string]bool),
 		VariablesExist: make(map[string]bool),
+		VariableValues: make(map[string]string),
 		Errors:         make(map[string]error),
 	}
 }
@@ -55,6 +56,14 @@ type UpdatedCommentRecord struct {
 	Body        string
 }
 
+// CreatedIssueRecord records an issue creation call.
+type CreatedIssueRecord struct {
+	Owner, Repo string
+	Title, Body string
+	Labels      []string
+	Number      int
+}
+
 // MinimizedCommentRecord records a comment minimize call.
 type MinimizedCommentRecord struct {
 	NodeID string
@@ -67,6 +76,7 @@ type ReviewRecord struct {
 	Number      int
 	Event, Body string
 	CommitSHA   string
+	Comments    []ReviewComment
 }
 
 // DismissedReviewRecord records a review dismissal call.
@@ -100,6 +110,7 @@ type FakeClient struct {
 	PullRequests      map[string][]ChangeProposal // key: "owner/repo"
 	TokenScopes       []string                    // scopes returned by GetTokenScopes
 	VariablesExist    map[string]bool             // key: "owner/repo/name"
+	VariableValues    map[string]string           // key: "owner/repo/name"
 
 	// App client IDs for GetAppClientID
 	AppClientIDs map[string]string // key: app slug → client ID
@@ -117,6 +128,7 @@ type FakeClient struct {
 
 	// Issue comments for ListIssueComments / UpdateIssueComment.
 	IssueComments map[string][]IssueComment // key: "owner/repo/number"
+	OpenIssues    map[string][]Issue        // key: "owner/repo"
 
 	// CommitFilesChanged controls the return value of CommitFiles (default true).
 	CommitFilesChanged *bool
@@ -140,6 +152,7 @@ type FakeClient struct {
 	CreatedOrgSecrets   []OrgSecretRecord
 	CreatedOrgVariables []OrgVariableRecord
 	DeletedOrgVariables []string // "org/name"
+	CreatedIssues       []CreatedIssueRecord
 	UpdatedComments     []UpdatedCommentRecord
 	MinimizedComments   []MinimizedCommentRecord
 	CreatedReviews      []ReviewRecord
@@ -149,6 +162,7 @@ type FakeClient struct {
 	// internal counters
 	proposalCounter int
 	commentCounter  int
+	issueCounter    int
 }
 
 // err checks for an injected error for the given method name.
@@ -521,6 +535,10 @@ func (f *FakeClient) CreateRepoSecret(_ context.Context, owner, repo, name, valu
 		Name:  name,
 		Value: value,
 	})
+	if f.Secrets == nil {
+		f.Secrets = make(map[string]bool)
+	}
+	f.Secrets[owner+"/"+repo+"/"+name] = true
 	return nil
 }
 
@@ -569,6 +587,22 @@ func (f *FakeClient) RepoVariableExists(_ context.Context, owner, repo, name str
 	return f.VariablesExist[owner+"/"+repo+"/"+name], nil
 }
 
+func (f *FakeClient) GetRepoVariable(_ context.Context, owner, repo, name string) (string, bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	if e := f.err("GetRepoVariable"); e != nil {
+		return "", false, e
+	}
+
+	if f.VariableValues != nil {
+		if val, ok := f.VariableValues[owner+"/"+repo+"/"+name]; ok {
+			return val, true, nil
+		}
+	}
+	return "", false, nil
+}
+
 func (f *FakeClient) GetLatestWorkflowRun(_ context.Context, owner, repo, workflowFile string) (*WorkflowRun, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -612,19 +646,75 @@ func (f *FakeClient) DispatchWorkflow(_ context.Context, _, _, _, _ string, _ ma
 	return nil
 }
 
-func (f *FakeClient) CreateIssue(_ context.Context, _, _, _, _ string) (*Issue, error) {
+func (f *FakeClient) CreateIssue(_ context.Context, owner, repo, title, body string, labels ...string) (*Issue, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if e := f.err("CreateIssue"); e != nil {
 		return nil, e
 	}
-	return &Issue{Number: 1, Title: "fake", URL: "https://fake"}, nil
+	f.issueCounter++
+	issue := Issue{
+		Number: f.issueCounter,
+		Title:  title,
+		Body:   body,
+		URL:    fmt.Sprintf("https://github.com/%s/%s/issues/%d", owner, repo, f.issueCounter),
+		Labels: append([]string(nil), labels...),
+	}
+	f.CreatedIssues = append(f.CreatedIssues, CreatedIssueRecord{
+		Owner:  owner,
+		Repo:   repo,
+		Title:  title,
+		Body:   body,
+		Labels: append([]string(nil), labels...),
+		Number: issue.Number,
+	})
+	key := owner + "/" + repo
+	if f.OpenIssues == nil {
+		f.OpenIssues = make(map[string][]Issue)
+	}
+	f.OpenIssues[key] = append(f.OpenIssues[key], issue)
+	return &issue, nil
 }
 
 func (f *FakeClient) CloseIssue(_ context.Context, _, _ string, _ int) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.err("CloseIssue")
+}
+
+func (f *FakeClient) ListOpenIssues(_ context.Context, owner, repo string, labels ...string) ([]Issue, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if e := f.err("ListOpenIssues"); e != nil {
+		return nil, e
+	}
+	if f.OpenIssues == nil {
+		return nil, nil
+	}
+	issues := f.OpenIssues[owner+"/"+repo]
+	if len(labels) == 0 {
+		return append([]Issue(nil), issues...), nil
+	}
+	filtered := make([]Issue, 0, len(issues))
+	for _, issue := range issues {
+		if issueHasLabels(issue, labels) {
+			filtered = append(filtered, issue)
+		}
+	}
+	return filtered, nil
+}
+
+func issueHasLabels(issue Issue, labels []string) bool {
+	present := make(map[string]struct{}, len(issue.Labels))
+	for _, label := range issue.Labels {
+		present[label] = struct{}{}
+	}
+	for _, label := range labels {
+		if _, ok := present[label]; !ok {
+			return false
+		}
+	}
+	return true
 }
 
 func (f *FakeClient) ListIssueComments(_ context.Context, owner, repo string, number int) ([]IssueComment, error) {
@@ -710,7 +800,7 @@ func (f *FakeClient) GetPullRequestHeadSHA(_ context.Context, _, _ string, _ int
 	return f.PullRequestHeadSHA, nil
 }
 
-func (f *FakeClient) CreatePullRequestReview(_ context.Context, owner, repo string, number int, event, body, commitSHA string) error {
+func (f *FakeClient) CreatePullRequestReview(_ context.Context, owner, repo string, number int, event, body, commitSHA string, comments []ReviewComment) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if e := f.err("CreatePullRequestReview"); e != nil {
@@ -723,6 +813,7 @@ func (f *FakeClient) CreatePullRequestReview(_ context.Context, owner, repo stri
 		Event:     event,
 		Body:      body,
 		CommitSHA: commitSHA,
+		Comments:  comments,
 	})
 
 	review := PullRequestReview{

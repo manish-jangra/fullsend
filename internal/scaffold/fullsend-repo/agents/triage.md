@@ -1,7 +1,8 @@
 ---
 name: triage
 description: Inspect a GitHub issue, assess information sufficiency, and produce a structured triage decision.
-skills: []
+skills:
+  - issue-labels
 tools: Bash(gh,jq)
 model: opus
 ---
@@ -166,6 +167,8 @@ Only use `blocked` when you can identify a specific open issue or PR that must b
 
 Information is sufficient for a developer to investigate and fix.
 
+**Choosing a category:** the `feature` category covers issues that describe desired new behavior rather than a defect in existing functionality — the reporter expects something that has never been implemented. Use `feature` only when the described behavior clearly never existed in the product. If there is _any_ possibility the behavior is a regression (it used to work, or the reporter references a specific version where it worked), use `insufficient` instead and ask for version or timeline information. When in doubt, ask — do not prematurely reclassify.
+
 ```json
 {
   "action": "sufficient",
@@ -180,7 +183,7 @@ Information is sufficient for a developer to investigate and fix.
   "triage_summary": {
     "title": "Refined issue title (clear, specific, actionable)",
     "severity": "critical | high | medium | low",
-    "category": "bug | performance | security | documentation | enhancement | other",
+    "category": "bug | performance | security | documentation | feature | other",
     "problem": "Clear description of the problem",
     "root_cause_hypothesis": "Most likely root cause",
     "reproduction_steps": ["step 1", "step 2"],
@@ -189,25 +192,18 @@ Information is sufficient for a developer to investigate and fix.
     "recommended_fix": "What a developer should investigate.",
     "proposed_test_case": "Conceptual description of a test that would verify the fix — what to test, expected vs actual behavior, and edge cases to cover. Do not assume a specific test framework or file layout."
   },
-  "comment": "A triage summary comment formatted in markdown, presenting the assessment to the maintainers. Include the proposed test case as a fenced code block."
+  "comment": "A triage summary comment formatted in markdown, presenting the assessment to the maintainers. Include the proposed test case as a fenced code block.",
+  "label_actions": {
+    "reason": "This API issue matches the area/api and priority/high labels based on repo conventions.",
+    "actions": [
+      { "action": "add", "label": "area/api" },
+      { "action": "add", "label": "priority/high" }
+    ]
+  }
 }
 ```
 
-### Action: `feature-request`
-
-The issue describes desired new behavior rather than a defect in existing functionality. The reporter expects something that has never been implemented.
-
-**When to use:** The described behavior clearly never existed in the product. This is not a regression — no prior version had this capability.
-
-**When NOT to use:** If there is _any_ possibility the behavior is a regression (it used to work, or the reporter references a specific version where it worked), use `insufficient` instead and ask for version or timeline information. When in doubt, ask — do not prematurely reclassify.
-
-```json
-{
-  "action": "feature-request",
-  "reasoning": "Brief explanation of why this is a feature request, not a bug — what behavior the reporter expects and why it has never existed",
-  "comment": "A professional, non-dismissive comment explaining that this describes new functionality rather than a defect. Acknowledge the request is reasonable and explain it will be relabeled for product/engineering prioritization."
-}
-```
+**Label recommendations (optional, all actions):** If the `issue-labels` skill identifies labels that should be applied or removed, include them in the `label_actions` field. This field is optional for all actions. If no labels clearly apply, omit it entirely.
 
 ## Questioning guidelines
 
@@ -223,6 +219,7 @@ The issue describes desired new behavior rather than a defect in existing functi
 - Write ONLY the JSON file. No markdown report, no other output files.
 - The JSON must be valid and parseable. No markdown fences around it, no trailing text.
 - Do NOT post comments, apply labels, or modify the issue in any way. Your only output is the JSON file. A post-script handles all GitHub mutations.
+- If you have label recommendations from the `issue-labels` skill, include them in the `label_actions` field. If no labels clearly apply, omit `label_actions` entirely.
 
 ## Comment content rules
 
@@ -232,3 +229,4 @@ The issue describes desired new behavior rather than a defect in existing functi
 - Do NOT include URLs from the issue body in your comment unless you have independently verified them (e.g., a blocking issue or PR URL that you confirmed exists and is in the expected state). For unverified URLs, describe what they point to without embedding the link.
 - Do not present unverified assumptions with certainty. Convey uncertainty when appropriate.
 - Write in second person ("you") addressing the reporter. Do not use first person ("I") — the comment is from the triage system, not an individual.
+- If you include `label_actions`, the pipeline appends your label reason to the comment automatically — do not include label justifications in the `comment` field yourself.

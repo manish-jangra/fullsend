@@ -155,22 +155,28 @@ func TestLiveGCFClient_CreateWIFProvider(t *testing.T) {
 		callCount := 0
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			callCount++
-			if callCount == 1 {
+			switch callCount {
+			case 1:
 				assert.Equal(t, http.MethodPost, r.Method)
 				w.WriteHeader(http.StatusConflict)
-				return
+			case 2:
+				// Undelete attempt — returns 400 (not actually deleted).
+				assert.Equal(t, http.MethodPost, r.Method)
+				assert.Contains(t, r.URL.Path, ":undelete")
+				w.WriteHeader(http.StatusBadRequest)
+			case 3:
+				assert.Equal(t, http.MethodPatch, r.Method)
+				assert.Contains(t, r.URL.RawQuery, "attributeCondition")
+				assert.Contains(t, r.URL.RawQuery, "oidc.allowedAudiences")
+				var body map[string]interface{}
+				json.NewDecoder(r.Body).Decode(&body)
+				oidc, ok := body["oidc"].(map[string]interface{})
+				assert.True(t, ok, "oidc config should be in PATCH body")
+				audiences := oidc["allowedAudiences"].([]interface{})
+				assert.Equal(t, []interface{}{"fullsend-mint", "https://iam.googleapis.com/projects/123/locations/global/workloadIdentityPools/pool/providers/gh-oidc"}, audiences)
+				w.WriteHeader(http.StatusOK)
+				fmt.Fprintln(w, `{}`)
 			}
-			assert.Equal(t, http.MethodPatch, r.Method)
-			assert.Contains(t, r.URL.RawQuery, "attributeCondition")
-			assert.Contains(t, r.URL.RawQuery, "oidc.allowedAudiences")
-			var body map[string]interface{}
-			json.NewDecoder(r.Body).Decode(&body)
-			oidc, ok := body["oidc"].(map[string]interface{})
-			assert.True(t, ok, "oidc config should be in PATCH body")
-			audiences := oidc["allowedAudiences"].([]interface{})
-			assert.Equal(t, []interface{}{"fullsend-mint", "https://iam.googleapis.com/projects/123/locations/global/workloadIdentityPools/pool/providers/gh-oidc"}, audiences)
-			w.WriteHeader(http.StatusOK)
-			fmt.Fprintln(w, `{}`)
 		}))
 		defer srv.Close()
 
@@ -179,7 +185,7 @@ func TestLiveGCFClient_CreateWIFProvider(t *testing.T) {
 			AllowedAudiences:   []string{"fullsend-mint", "https://iam.googleapis.com/projects/123/locations/global/workloadIdentityPools/pool/providers/gh-oidc"},
 		})
 		require.NoError(t, err)
-		assert.Equal(t, 2, callCount)
+		assert.Equal(t, 3, callCount)
 	})
 }
 
@@ -366,6 +372,97 @@ func TestLiveGCFClient_SetSecretIAMBinding(t *testing.T) {
 		err := newTestClient(srv).SetSecretIAMBinding(context.Background(), "../../evil", "m", "role")
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "invalid secret resource path")
+	})
+}
+
+// --- SetProjectIAMBinding ---
+
+func TestLiveGCFClient_SetProjectIAMBinding(t *testing.T) {
+	t.Run("adds new binding", func(t *testing.T) {
+		callCount := 0
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			callCount++
+			assert.Equal(t, http.MethodPost, r.Method)
+			if callCount == 1 {
+				assert.Contains(t, r.URL.Path, ":getIamPolicy")
+				w.WriteHeader(http.StatusOK)
+				fmt.Fprintln(w, `{"bindings":[],"etag":"v1"}`)
+				return
+			}
+			assert.Contains(t, r.URL.Path, ":setIamPolicy")
+			var body map[string]interface{}
+			json.NewDecoder(r.Body).Decode(&body)
+			policy := body["policy"].(map[string]interface{})
+			assert.Equal(t, "v1", policy["etag"])
+			bindings := policy["bindings"].([]interface{})
+			assert.Len(t, bindings, 1)
+			b := bindings[0].(map[string]interface{})
+			assert.Equal(t, "roles/aiplatform.user", b["role"])
+			members := b["members"].([]interface{})
+			assert.Contains(t, members, "principalSet://iam.googleapis.com/projects/123/locations/global/workloadIdentityPools/pool/attribute.repository_owner/my-org")
+			w.WriteHeader(http.StatusOK)
+		}))
+		defer srv.Close()
+
+		err := newTestClient(srv).SetProjectIAMBinding(context.Background(),
+			"my-project",
+			"principalSet://iam.googleapis.com/projects/123/locations/global/workloadIdentityPools/pool/attribute.repository_owner/my-org",
+			"roles/aiplatform.user")
+		require.NoError(t, err)
+		assert.Equal(t, 2, callCount)
+	})
+
+	t.Run("member already bound", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusOK)
+			fmt.Fprintln(w, `{"bindings":[{"role":"roles/aiplatform.user","members":["principalSet://example"]}]}`)
+		}))
+		defer srv.Close()
+
+		err := newTestClient(srv).SetProjectIAMBinding(context.Background(),
+			"my-project", "principalSet://example", "roles/aiplatform.user")
+		require.NoError(t, err)
+	})
+
+	t.Run("retries on 409 conflict", func(t *testing.T) {
+		callCount := 0
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			callCount++
+			if callCount <= 2 {
+				if callCount%2 == 1 {
+					w.WriteHeader(http.StatusOK)
+					fmt.Fprintln(w, `{"bindings":[],"etag":"v1"}`)
+					return
+				}
+				w.WriteHeader(http.StatusConflict)
+				fmt.Fprintln(w, `{"error":{"message":"conflict"}}`)
+				return
+			}
+			if callCount == 3 {
+				w.WriteHeader(http.StatusOK)
+				fmt.Fprintln(w, `{"bindings":[],"etag":"v2"}`)
+				return
+			}
+			w.WriteHeader(http.StatusOK)
+		}))
+		defer srv.Close()
+
+		err := newTestClient(srv).SetProjectIAMBinding(context.Background(),
+			"proj", "member", "role")
+		require.NoError(t, err)
+		assert.Equal(t, 4, callCount)
+	})
+
+	t.Run("getIamPolicy error", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusForbidden)
+			fmt.Fprintln(w, `{"error":{"message":"denied"}}`)
+		}))
+		defer srv.Close()
+
+		err := newTestClient(srv).SetProjectIAMBinding(context.Background(), "proj", "m", "role")
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "getting IAM policy returned 403")
 	})
 }
 
@@ -645,6 +742,51 @@ func TestLiveGCFClient_UpdateFunction(t *testing.T) {
 		_, err := newTestClient(srv).UpdateFunction(context.Background(), "proj", "us-central1", "func", FunctionConfig{})
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "unexpected status 400")
+	})
+}
+
+// --- UpdateFunctionEnvVars ---
+
+func TestLiveGCFClient_UpdateFunctionEnvVars(t *testing.T) {
+	t.Run("success", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			assert.Equal(t, http.MethodPatch, r.Method)
+			assert.Contains(t, r.URL.Path, "/functions/my-func")
+			assert.Contains(t, r.URL.RawQuery, "serviceConfig.environmentVariables")
+
+			var body map[string]interface{}
+			json.NewDecoder(r.Body).Decode(&body)
+
+			assert.Contains(t, body, "name")
+			assert.Contains(t, body, "serviceConfig")
+			assert.NotContains(t, body, "buildConfig")
+
+			sc := body["serviceConfig"].(map[string]interface{})
+			envVars := sc["environmentVariables"].(map[string]interface{})
+			assert.Equal(t, "org1,org2", envVars["ALLOWED_ORGS"])
+
+			w.WriteHeader(http.StatusOK)
+			json.NewEncoder(w).Encode(map[string]string{"name": "operations/envvar-op"})
+		}))
+		defer srv.Close()
+
+		opName, err := newTestClient(srv).UpdateFunctionEnvVars(context.Background(), "proj", "us-central1", "my-func", map[string]string{
+			"ALLOWED_ORGS": "org1,org2",
+		})
+		require.NoError(t, err)
+		assert.Equal(t, "operations/envvar-op", opName)
+	})
+
+	t.Run("error", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusForbidden)
+			fmt.Fprintln(w, `{"error":{"message":"permission denied"}}`)
+		}))
+		defer srv.Close()
+
+		_, err := newTestClient(srv).UpdateFunctionEnvVars(context.Background(), "proj", "us-central1", "func", map[string]string{})
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "unexpected status 403")
 	})
 }
 

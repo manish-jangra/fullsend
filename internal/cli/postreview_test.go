@@ -1,10 +1,12 @@
 package cli
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -61,6 +63,48 @@ func TestParseReviewResult_HeadSHA(t *testing.T) {
 	assert.Equal(t, "abc1234", result.HeadSHA)
 }
 
+func TestParseReviewResult_Findings(t *testing.T) {
+	input := `{"body":"Review","action":"approve","findings":[{"severity":"low","category":"docs","file":"README.md","line":12,"description":"Missing usage note","remediation":"Add a short note","actionable":true}]}`
+	result, err := parseReviewResult(input)
+	require.NoError(t, err)
+	require.Len(t, result.Findings, 1)
+	assert.Equal(t, "low", result.Findings[0].Severity)
+	assert.True(t, result.Findings[0].Actionable)
+}
+
+func TestNewPostReviewCmd_MaxFollowUpIssuesDefault(t *testing.T) {
+	cmd := newPostReviewCmd()
+	flag := cmd.Flags().Lookup("max-follow-up-issues")
+	require.NotNil(t, flag)
+	assert.Equal(t, "3", flag.DefValue)
+}
+
+func TestValidateMaxReviewFollowUpIssues(t *testing.T) {
+	tests := []struct {
+		name    string
+		value   int
+		wantErr bool
+	}{
+		{name: "disabled", value: 0},
+		{name: "within cap", value: 2},
+		{name: "at cap", value: 3},
+		{name: "negative", value: -1, wantErr: true},
+		{name: "above cap", value: 4, wantErr: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateMaxReviewFollowUpIssues(tt.value, "--max-follow-up-issues")
+			if tt.wantErr {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), "between 0 and 3")
+			} else {
+				require.NoError(t, err)
+			}
+		})
+	}
+}
+
 func TestReviewActionToEvent(t *testing.T) {
 	tests := []struct {
 		action    string
@@ -70,8 +114,10 @@ func TestReviewActionToEvent(t *testing.T) {
 		{"approve", "APPROVE", true},
 		{"Approve", "APPROVE", true},
 		{"request-changes", "REQUEST_CHANGES", true},
-		{"request_changes", "REQUEST_CHANGES", true},
+		{"request_changes", "", false},
 		{"comment", "COMMENT", true},
+		{"reject", "REQUEST_CHANGES", true},
+		{"Reject", "REQUEST_CHANGES", true},
 		{"unknown", "", false},
 		{"", "", false},
 	}
@@ -201,7 +247,7 @@ func TestSubmitFormalReview_CreatesAndMinimizesStale(t *testing.T) {
 	}
 
 	printer := ui.New(io.Discard)
-	err := submitFormalReview(context.Background(), fc, "acme", "repo", 1, "approve", "abc123def456", "", false, printer)
+	err := submitFormalReview(context.Background(), fc, "acme", "repo", 1, "approve", "abc123def456", "", nil, false, printer)
 	require.NoError(t, err)
 
 	require.Len(t, fc.CreatedReviews, 1)
@@ -228,7 +274,7 @@ func TestSubmitFormalReview_DismissesStaleRequestChanges(t *testing.T) {
 	}
 
 	printer := ui.New(io.Discard)
-	err := submitFormalReview(context.Background(), fc, "acme", "repo", 1, "approve", "", "", false, printer)
+	err := submitFormalReview(context.Background(), fc, "acme", "repo", 1, "approve", "", "", nil, false, printer)
 	require.NoError(t, err)
 
 	require.Len(t, fc.DismissedReviews, 1)
@@ -246,7 +292,7 @@ func TestSubmitFormalReview_DismissesOnCommentVerdict(t *testing.T) {
 	}
 
 	printer := ui.New(io.Discard)
-	err := submitFormalReview(context.Background(), fc, "acme", "repo", 1, "comment", "", "", false, printer)
+	err := submitFormalReview(context.Background(), fc, "acme", "repo", 1, "comment", "", "", nil, false, printer)
 	require.NoError(t, err)
 
 	require.Len(t, fc.DismissedReviews, 1, "COMMENT verdict must still dismiss stale CHANGES_REQUESTED")
@@ -258,7 +304,7 @@ func TestSubmitFormalReview_DryRun(t *testing.T) {
 	fc := forge.NewFakeClient()
 	printer := ui.New(io.Discard)
 
-	err := submitFormalReview(context.Background(), fc, "acme", "repo", 1, "approve", "", "", true, printer)
+	err := submitFormalReview(context.Background(), fc, "acme", "repo", 1, "approve", "", "", nil, true, printer)
 	require.NoError(t, err)
 	assert.Empty(t, fc.CreatedReviews)
 }
@@ -267,7 +313,7 @@ func TestSubmitFormalReview_UnknownAction(t *testing.T) {
 	fc := forge.NewFakeClient()
 	printer := ui.New(io.Discard)
 
-	err := submitFormalReview(context.Background(), fc, "acme", "repo", 1, "unknown-action", "", "", false, printer)
+	err := submitFormalReview(context.Background(), fc, "acme", "repo", 1, "unknown-action", "", "", nil, false, printer)
 	require.NoError(t, err)
 	assert.Empty(t, fc.CreatedReviews)
 }
@@ -310,14 +356,14 @@ func TestHexSHAValidation(t *testing.T) {
 		sha   string
 		valid bool
 	}{
-		{"abc123f", false},                                                                    // too short (7 chars)
-		{"abc123def456", false},                                                               // too short (12 chars)
-		{"abc123def456abc123def456abc123def456abcd", true},                                     // 40-char SHA-1
-		{"abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789", true},  // 64-char SHA-256
+		{"abc123f", false},                                 // too short (7 chars)
+		{"abc123def456", false},                            // too short (12 chars)
+		{"abc123def456abc123def456abc123def456abcd", true}, // 40-char SHA-1
+		{"abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789", true},   // 64-char SHA-256
 		{"abcdef0123456789abcdef0123456789abcdef0123456789abcdef01234567890", false}, // 65 chars (too long)
-		{"", true},          // empty is valid (means "no SHA provided")
-		{"not-hex!", false},  // non-hex chars
-		{"abc 123", false},   // spaces
+		{"", true},               // empty is valid (means "no SHA provided")
+		{"not-hex!", false},      // non-hex chars
+		{"abc 123", false},       // spaces
 		{"abc123`inject", false}, // backtick injection
 		{"ABC123DEF456ABC123DEF456ABC123DEF456ABCD", true}, // uppercase 40-char
 	}
@@ -357,7 +403,7 @@ func TestSubmitFormalReview_PassesCommitSHA(t *testing.T) {
 	fc.AuthenticatedUser = "fullsend-bot"
 	printer := ui.New(io.Discard)
 
-	err := submitFormalReview(context.Background(), fc, "acme", "repo", 1, "comment", "deadbeef1234", "", false, printer)
+	err := submitFormalReview(context.Background(), fc, "acme", "repo", 1, "comment", "deadbeef1234", "", nil, false, printer)
 	require.NoError(t, err)
 	assert.Empty(t, fc.CreatedReviews, "COMMENT events should skip formal review")
 }
@@ -367,7 +413,7 @@ func TestSubmitFormalReview_EmptyCommitSHA(t *testing.T) {
 	fc.AuthenticatedUser = "fullsend-bot"
 	printer := ui.New(io.Discard)
 
-	err := submitFormalReview(context.Background(), fc, "acme", "repo", 1, "approve", "", "", false, printer)
+	err := submitFormalReview(context.Background(), fc, "acme", "repo", 1, "approve", "", "", nil, false, printer)
 	require.NoError(t, err)
 	require.Len(t, fc.CreatedReviews, 1)
 	assert.Equal(t, "", fc.CreatedReviews[0].CommitSHA)
@@ -378,7 +424,7 @@ func TestSubmitFormalReview_ApproveEmptyBody(t *testing.T) {
 	fc.AuthenticatedUser = "fullsend-bot"
 	printer := ui.New(io.Discard)
 
-	err := submitFormalReview(context.Background(), fc, "acme", "repo", 1, "approve", "", "", false, printer)
+	err := submitFormalReview(context.Background(), fc, "acme", "repo", 1, "approve", "", "", nil, false, printer)
 	require.NoError(t, err)
 	require.Len(t, fc.CreatedReviews, 1)
 	assert.Empty(t, fc.CreatedReviews[0].Body, "APPROVE body should be empty to avoid duplicate notifications")
@@ -390,7 +436,7 @@ func TestSubmitFormalReview_RequestChangesIncludesCommentURL(t *testing.T) {
 	printer := ui.New(io.Discard)
 
 	commentURL := "https://github.com/acme/repo/pull/1#issuecomment-42"
-	err := submitFormalReview(context.Background(), fc, "acme", "repo", 1, "request-changes", "", commentURL, false, printer)
+	err := submitFormalReview(context.Background(), fc, "acme", "repo", 1, "request-changes", "", commentURL, nil, false, printer)
 	require.NoError(t, err)
 	require.Len(t, fc.CreatedReviews, 1)
 	assert.Equal(t, "REQUEST_CHANGES", fc.CreatedReviews[0].Event)
@@ -403,11 +449,24 @@ func TestSubmitFormalReview_RequestChangesFallbackWithoutURL(t *testing.T) {
 	fc.AuthenticatedUser = "fullsend-bot"
 	printer := ui.New(io.Discard)
 
-	err := submitFormalReview(context.Background(), fc, "acme", "repo", 1, "request-changes", "", "", false, printer)
+	err := submitFormalReview(context.Background(), fc, "acme", "repo", 1, "request-changes", "", "", nil, false, printer)
 	require.NoError(t, err)
 	require.Len(t, fc.CreatedReviews, 1)
 	assert.Equal(t, "REQUEST_CHANGES", fc.CreatedReviews[0].Event)
 	assert.Equal(t, "See the review comment above for full details.", fc.CreatedReviews[0].Body)
+}
+
+func TestSubmitFormalReview_RejectSubmitsRequestChanges(t *testing.T) {
+	fc := forge.NewFakeClient()
+	fc.AuthenticatedUser = "fullsend-bot"
+	printer := ui.New(io.Discard)
+
+	commentURL := "https://github.com/acme/repo/pull/1#issuecomment-99"
+	err := submitFormalReview(context.Background(), fc, "acme", "repo", 1, "reject", "abc123", commentURL, nil, false, printer)
+	require.NoError(t, err)
+	require.Len(t, fc.CreatedReviews, 1)
+	assert.Equal(t, "REQUEST_CHANGES", fc.CreatedReviews[0].Event)
+	assert.Contains(t, fc.CreatedReviews[0].Body, commentURL)
 }
 
 func TestSubmitFormalReview_CommentSkipped(t *testing.T) {
@@ -415,7 +474,7 @@ func TestSubmitFormalReview_CommentSkipped(t *testing.T) {
 	fc.AuthenticatedUser = "fullsend-bot"
 	printer := ui.New(io.Discard)
 
-	err := submitFormalReview(context.Background(), fc, "acme", "repo", 1, "comment", "", "", false, printer)
+	err := submitFormalReview(context.Background(), fc, "acme", "repo", 1, "comment", "", "", nil, false, printer)
 	require.NoError(t, err)
 	assert.Empty(t, fc.CreatedReviews, "COMMENT events should skip formal review")
 }
@@ -539,7 +598,7 @@ func TestSubmitFormalReview_AuthErrorSkipsCleanup(t *testing.T) {
 	fc.Errors["GetAuthenticatedUser"] = fmt.Errorf("auth error")
 	printer := ui.New(io.Discard)
 
-	err := submitFormalReview(context.Background(), fc, "acme", "repo", 1, "approve", "", "", false, printer)
+	err := submitFormalReview(context.Background(), fc, "acme", "repo", 1, "approve", "", "", nil, false, printer)
 	require.NoError(t, err)
 	assert.Empty(t, fc.DismissedReviews)
 	assert.Empty(t, fc.MinimizedComments)
@@ -552,9 +611,507 @@ func TestSubmitFormalReview_ListErrorSkipsCleanup(t *testing.T) {
 	fc.Errors["ListPullRequestReviews"] = fmt.Errorf("list error")
 	printer := ui.New(io.Discard)
 
-	err := submitFormalReview(context.Background(), fc, "acme", "repo", 1, "approve", "", "", false, printer)
+	err := submitFormalReview(context.Background(), fc, "acme", "repo", 1, "approve", "", "", nil, false, printer)
 	require.NoError(t, err)
 	assert.Empty(t, fc.DismissedReviews)
 	assert.Empty(t, fc.MinimizedComments)
 	require.Len(t, fc.CreatedReviews, 1, "review should still be created despite list error")
+}
+
+func TestSubmitFormalReview_AttachesInlineComments(t *testing.T) {
+	fc := forge.NewFakeClient()
+	fc.AuthenticatedUser = "fullsend-bot"
+	printer := ui.New(io.Discard)
+
+	findings := []ReviewFinding{
+		{
+			Severity:    "high",
+			Category:    "missing-test",
+			File:        "internal/service.go",
+			Line:        42,
+			Description: "Missing test coverage for error path.",
+			Remediation: "Add a unit test for the error case.",
+		},
+		{
+			Severity:    "medium",
+			Category:    "logic-error",
+			File:        "internal/handler.go",
+			Line:        10,
+			Description: "Nil pointer dereference possible.",
+		},
+	}
+
+	err := submitFormalReview(context.Background(), fc, "acme", "repo", 1, "request-changes", "abc123", "", findings, false, printer)
+	require.NoError(t, err)
+
+	require.Len(t, fc.CreatedReviews, 1)
+	review := fc.CreatedReviews[0]
+	assert.Equal(t, "REQUEST_CHANGES", review.Event)
+	require.Len(t, review.Comments, 2)
+
+	assert.Equal(t, "internal/service.go", review.Comments[0].Path)
+	assert.Equal(t, 42, review.Comments[0].Line)
+	assert.Contains(t, review.Comments[0].Body, "high")
+	assert.Contains(t, review.Comments[0].Body, "missing-test")
+	assert.Contains(t, review.Comments[0].Body, "Missing test coverage")
+	assert.Contains(t, review.Comments[0].Body, "Suggested fix:")
+
+	assert.Equal(t, "internal/handler.go", review.Comments[1].Path)
+	assert.Equal(t, 10, review.Comments[1].Line)
+	assert.Contains(t, review.Comments[1].Body, "medium")
+	assert.Contains(t, review.Comments[1].Body, "Nil pointer dereference")
+	assert.NotContains(t, review.Comments[1].Body, "Suggested fix:")
+}
+
+func TestSubmitFormalReview_SkipsFindingsWithoutLocation(t *testing.T) {
+	fc := forge.NewFakeClient()
+	fc.AuthenticatedUser = "fullsend-bot"
+	printer := ui.New(io.Discard)
+
+	findings := []ReviewFinding{
+		{
+			Severity:    "high",
+			Category:    "missing-test",
+			File:        "internal/service.go",
+			Line:        42,
+			Description: "Has location.",
+		},
+		{
+			Severity:    "medium",
+			Category:    "style",
+			File:        "",
+			Description: "No file path.",
+		},
+		{
+			Severity:    "low",
+			Category:    "docs",
+			File:        "README.md",
+			Line:        0,
+			Description: "No line number.",
+		},
+	}
+
+	err := submitFormalReview(context.Background(), fc, "acme", "repo", 1, "request-changes", "", "", findings, false, printer)
+	require.NoError(t, err)
+
+	require.Len(t, fc.CreatedReviews, 1)
+	require.Len(t, fc.CreatedReviews[0].Comments, 1, "only the finding with file+line should become an inline comment")
+	assert.Equal(t, "internal/service.go", fc.CreatedReviews[0].Comments[0].Path)
+}
+
+func TestFindingsToReviewComments(t *testing.T) {
+	findings := []ReviewFinding{
+		{File: "a.go", Line: 10, Severity: "high", Category: "bug", Description: "Desc A"},
+		{File: "", Line: 5, Severity: "low", Category: "style", Description: "No file"},
+		{File: "b.go", Line: 0, Severity: "info", Category: "docs", Description: "No line"},
+		{File: "c.go", Line: 20, Severity: "critical", Category: "security", Description: "Desc C", Remediation: "Fix it"},
+	}
+
+	comments := findingsToReviewComments(findings)
+	require.Len(t, comments, 2)
+
+	assert.Equal(t, "a.go", comments[0].Path)
+	assert.Equal(t, 10, comments[0].Line)
+	assert.Contains(t, comments[0].Body, "high")
+	assert.Contains(t, comments[0].Body, "Desc A")
+
+	assert.Equal(t, "c.go", comments[1].Path)
+	assert.Equal(t, 20, comments[1].Line)
+	assert.Contains(t, comments[1].Body, "critical")
+	assert.Contains(t, comments[1].Body, "Fix it")
+}
+
+func TestFormatFindingComment(t *testing.T) {
+	t.Run("with remediation", func(t *testing.T) {
+		f := ReviewFinding{
+			Severity:    "high",
+			Category:    "missing-test",
+			Description: "No coverage for error path.",
+			Remediation: "Add a unit test.",
+		}
+		body := formatFindingComment(f)
+		assert.Contains(t, body, "**[high]** missing-test")
+		assert.Contains(t, body, "No coverage for error path.")
+		assert.Contains(t, body, "**Suggested fix:** Add a unit test.")
+	})
+
+	t.Run("without remediation", func(t *testing.T) {
+		f := ReviewFinding{
+			Severity:    "low",
+			Category:    "style",
+			Description: "Consider renaming.",
+		}
+		body := formatFindingComment(f)
+		assert.Contains(t, body, "**[low]** style")
+		assert.Contains(t, body, "Consider renaming.")
+		assert.NotContains(t, body, "Suggested fix:")
+	})
+}
+
+func TestPostApprovedFollowUpIssues_CreatesIssuesAndSummary(t *testing.T) {
+	fc := forge.NewFakeClient()
+	fc.AuthenticatedUser = "fullsend-review[bot]"
+	printer := ui.New(io.Discard)
+	parsed := ReviewResult{
+		Action: "approve",
+		Findings: []ReviewFinding{
+			{
+				Severity:    "low",
+				Category:    "missing-test",
+				File:        "internal/service.go",
+				Line:        42,
+				Description: "Add coverage for the empty response path.",
+				Remediation: "Add a unit test that exercises an empty upstream response.",
+				Actionable:  true,
+			},
+		},
+	}
+
+	err := postApprovedFollowUpIssues(context.Background(), fc, "acme", "repo", 9, parsed, false, maxReviewFollowUpIssues, printer)
+	require.NoError(t, err)
+
+	require.Len(t, fc.CreatedIssues, 1)
+	created := fc.CreatedIssues[0]
+	assert.Equal(t, "acme", created.Owner)
+	assert.Equal(t, "repo", created.Repo)
+	assert.Contains(t, created.Title, "Follow-up from PR #9")
+	assert.Contains(t, created.Body, "https://github.com/acme/repo/pull/9")
+	assert.Contains(t, created.Body, "internal/service.go:42")
+	assert.Contains(t, created.Body, reviewFollowupIssueMarkerPrefix)
+	assert.Equal(t, []string{"type/chore"}, created.Labels)
+
+	comments := fc.IssueComments["acme/repo/9"]
+	require.Len(t, comments, 1)
+	assert.Contains(t, comments[0].Body, "Created follow-up issues")
+	assert.Contains(t, comments[0].Body, "#1")
+}
+
+func TestPostApprovedFollowUpIssues_SkipsNonActionableFindings(t *testing.T) {
+	fc := forge.NewFakeClient()
+	printer := ui.New(io.Discard)
+	parsed := ReviewResult{
+		Action: "approve",
+		Findings: []ReviewFinding{
+			{
+				Severity:    "info",
+				Category:    "style",
+				File:        "README.md",
+				Description: "Nice-to-have wording improvement.",
+				Actionable:  false,
+			},
+		},
+	}
+
+	err := postApprovedFollowUpIssues(context.Background(), fc, "acme", "repo", 9, parsed, false, maxReviewFollowUpIssues, printer)
+	require.NoError(t, err)
+	assert.Empty(t, fc.CreatedIssues)
+	assert.Empty(t, fc.IssueComments)
+}
+
+func TestPostApprovedFollowUpIssues_SkipsMediumFindings(t *testing.T) {
+	fc := forge.NewFakeClient()
+	printer := ui.New(io.Discard)
+	parsed := ReviewResult{
+		Action: "approve",
+		Findings: []ReviewFinding{
+			{
+				Severity:    "medium",
+				Category:    "missing-test",
+				File:        "internal/service.go",
+				Description: "Medium findings should not be turned into approve follow-ups.",
+				Actionable:  true,
+			},
+		},
+	}
+
+	err := postApprovedFollowUpIssues(context.Background(), fc, "acme", "repo", 9, parsed, false, maxReviewFollowUpIssues, printer)
+	require.NoError(t, err)
+	assert.Empty(t, fc.CreatedIssues)
+	assert.Empty(t, fc.IssueComments)
+}
+
+func TestPostApprovedFollowUpIssues_UsesExistingDuplicate(t *testing.T) {
+	finding := ReviewFinding{
+		Severity:    "info",
+		Category:    "docs",
+		File:        "README.md",
+		Line:        7,
+		Description: "Document the new flag.",
+		Actionable:  true,
+	}
+	marker := reviewFollowupIssueMarker("acme", "repo", finding)
+	fc := forge.NewFakeClient()
+	fc.AuthenticatedUser = "fullsend-review[bot]"
+	fc.OpenIssues = map[string][]forge.Issue{
+		"acme/repo": {
+			{
+				Number: 12,
+				Title:  "Existing follow-up",
+				Body:   marker + "\n\nAlready tracked.",
+				URL:    "https://github.com/acme/repo/issues/12",
+				Labels: []string{"type/chore"},
+			},
+		},
+	}
+	printer := ui.New(io.Discard)
+	parsed := ReviewResult{Action: "approve", Findings: []ReviewFinding{finding}}
+
+	err := postApprovedFollowUpIssues(context.Background(), fc, "acme", "repo", 9, parsed, false, maxReviewFollowUpIssues, printer)
+	require.NoError(t, err)
+
+	assert.Empty(t, fc.CreatedIssues)
+	comments := fc.IssueComments["acme/repo/9"]
+	require.Len(t, comments, 1)
+	assert.Contains(t, comments[0].Body, "Existing follow-up issues")
+	assert.Contains(t, comments[0].Body, "#12")
+}
+
+func TestPostApprovedFollowUpIssues_DedupesAcrossPRs(t *testing.T) {
+	finding := ReviewFinding{
+		Severity:    "low",
+		Category:    "docs",
+		File:        "README.md",
+		Line:        7,
+		Description: "Document the new flag.",
+		Actionable:  true,
+	}
+	marker := reviewFollowupIssueMarker("acme", "repo", finding)
+	fc := forge.NewFakeClient()
+	fc.AuthenticatedUser = "fullsend-review[bot]"
+	fc.OpenIssues = map[string][]forge.Issue{
+		"acme/repo": {
+			{
+				Number: 12,
+				Title:  "Existing follow-up from earlier PR",
+				Body:   marker + "\n\nOriginally filed from PR #9.",
+				URL:    "https://github.com/acme/repo/issues/12",
+				Labels: []string{"type/chore"},
+			},
+		},
+	}
+	printer := ui.New(io.Discard)
+	parsed := ReviewResult{Action: "approve", Findings: []ReviewFinding{finding}}
+
+	err := postApprovedFollowUpIssues(context.Background(), fc, "acme", "repo", 10, parsed, false, maxReviewFollowUpIssues, printer)
+	require.NoError(t, err)
+
+	assert.Empty(t, fc.CreatedIssues)
+	comments := fc.IssueComments["acme/repo/10"]
+	require.Len(t, comments, 1)
+	assert.Contains(t, comments[0].Body, "Existing follow-up issues")
+	assert.Contains(t, comments[0].Body, "#12")
+}
+
+func TestPostApprovedFollowUpIssues_WarnsOnDuplicateMarkers(t *testing.T) {
+	finding := ReviewFinding{
+		Severity:    "low",
+		Category:    "docs",
+		File:        "README.md",
+		Line:        7,
+		Description: "Document the new flag.",
+		Actionable:  true,
+	}
+	marker := reviewFollowupIssueMarker("acme", "repo", finding)
+	fc := forge.NewFakeClient()
+	fc.AuthenticatedUser = "fullsend-review[bot]"
+	fc.OpenIssues = map[string][]forge.Issue{
+		"acme/repo": {
+			{
+				Number: 12,
+				Title:  "Existing follow-up",
+				Body:   marker + "\n\nAlready tracked.",
+				URL:    "https://github.com/acme/repo/issues/12",
+				Labels: []string{"type/chore"},
+			},
+			{
+				Number: 13,
+				Title:  "Duplicate follow-up",
+				Body:   marker + "\n\nManually duplicated.",
+				URL:    "https://github.com/acme/repo/issues/13",
+				Labels: []string{"type/chore"},
+			},
+		},
+	}
+	var out bytes.Buffer
+	printer := ui.New(&out)
+	parsed := ReviewResult{Action: "approve", Findings: []ReviewFinding{finding}}
+
+	err := postApprovedFollowUpIssues(context.Background(), fc, "acme", "repo", 10, parsed, false, maxReviewFollowUpIssues, printer)
+	require.NoError(t, err)
+
+	assert.Empty(t, fc.CreatedIssues)
+	comments := fc.IssueComments["acme/repo/10"]
+	require.Len(t, comments, 1)
+	assert.Contains(t, comments[0].Body, "#12")
+	assert.NotContains(t, comments[0].Body, "#13")
+	assert.Contains(t, out.String(), "Duplicate review follow-up marker found in issues #12 and #13; reusing #12")
+}
+
+func TestPostApprovedFollowUpIssues_DryRun(t *testing.T) {
+	fc := forge.NewFakeClient()
+	printer := ui.New(io.Discard)
+	parsed := ReviewResult{
+		Action: "approve",
+		Findings: []ReviewFinding{
+			{
+				Severity:    "low",
+				Category:    "docs",
+				File:        "README.md",
+				Description: "Document the behavior.",
+				Actionable:  true,
+			},
+		},
+	}
+
+	err := postApprovedFollowUpIssues(context.Background(), fc, "acme", "repo", 9, parsed, true, maxReviewFollowUpIssues, printer)
+	require.NoError(t, err)
+	assert.Empty(t, fc.CreatedIssues)
+	assert.Empty(t, fc.IssueComments)
+}
+
+func TestPostApprovedFollowUpIssues_RespectsCreateCap(t *testing.T) {
+	fc := forge.NewFakeClient()
+	fc.AuthenticatedUser = "fullsend-review[bot]"
+	printer := ui.New(io.Discard)
+
+	findings := make([]ReviewFinding, 0, 5)
+	for i := 0; i < 5; i++ {
+		findings = append(findings, ReviewFinding{
+			Severity:    "low",
+			Category:    "docs",
+			File:        "README.md",
+			Line:        i + 1,
+			Description: fmt.Sprintf("Document behavior %d.", i+1),
+			Actionable:  true,
+		})
+	}
+	parsed := ReviewResult{Action: "approve", Findings: findings}
+
+	err := postApprovedFollowUpIssues(context.Background(), fc, "acme", "repo", 9, parsed, false, 2, printer)
+	require.NoError(t, err)
+
+	require.Len(t, fc.CreatedIssues, 2)
+	assert.Contains(t, fc.CreatedIssues[0].Body, "Document behavior 1.")
+	assert.Contains(t, fc.CreatedIssues[1].Body, "Document behavior 2.")
+
+	comments := fc.IssueComments["acme/repo/9"]
+	require.Len(t, comments, 1)
+	assert.Contains(t, comments[0].Body, "capped at 2")
+	assert.Contains(t, comments[0].Body, "3 actionable non-blocking finding(s) were not filed")
+}
+
+func TestPostApprovedFollowUpIssues_ExistingIssuesDoNotConsumeCreateCap(t *testing.T) {
+	existingFinding := ReviewFinding{
+		Severity:    "info",
+		Category:    "docs",
+		File:        "README.md",
+		Line:        7,
+		Description: "Document the existing flag.",
+		Actionable:  true,
+	}
+	marker := reviewFollowupIssueMarker("acme", "repo", existingFinding)
+
+	fc := forge.NewFakeClient()
+	fc.AuthenticatedUser = "fullsend-review[bot]"
+	fc.OpenIssues = map[string][]forge.Issue{
+		"acme/repo": {
+			{
+				Number: 12,
+				Title:  "Existing follow-up",
+				Body:   marker + "\n\nAlready tracked.",
+				URL:    "https://github.com/acme/repo/issues/12",
+				Labels: []string{"type/chore"},
+			},
+		},
+	}
+	printer := ui.New(io.Discard)
+	parsed := ReviewResult{
+		Action: "approve",
+		Findings: []ReviewFinding{
+			existingFinding,
+			{
+				Severity:    "low",
+				Category:    "docs",
+				File:        "README.md",
+				Line:        8,
+				Description: "Document the new flag.",
+				Actionable:  true,
+			},
+			{
+				Severity:    "low",
+				Category:    "docs",
+				File:        "README.md",
+				Line:        9,
+				Description: "Document another new flag.",
+				Actionable:  true,
+			},
+		},
+	}
+
+	err := postApprovedFollowUpIssues(context.Background(), fc, "acme", "repo", 9, parsed, false, 1, printer)
+	require.NoError(t, err)
+
+	require.Len(t, fc.CreatedIssues, 1)
+	assert.Contains(t, fc.CreatedIssues[0].Body, "Document the new flag.")
+
+	comments := fc.IssueComments["acme/repo/9"]
+	require.Len(t, comments, 1)
+	assert.Contains(t, comments[0].Body, "Existing follow-up issues")
+	assert.Contains(t, comments[0].Body, "#12")
+	assert.Contains(t, comments[0].Body, "capped at 1")
+	assert.Contains(t, comments[0].Body, "1 actionable non-blocking finding(s) were not filed")
+}
+
+func TestPostApprovedFollowUpIssues_ListOpenIssuesError(t *testing.T) {
+	fc := forge.NewFakeClient()
+	fc.Errors["ListOpenIssues"] = fmt.Errorf("boom")
+	printer := ui.New(io.Discard)
+	parsed := ReviewResult{
+		Action: "approve",
+		Findings: []ReviewFinding{
+			{
+				Severity:    "low",
+				Category:    "docs",
+				File:        "README.md",
+				Description: "Document the behavior.",
+				Actionable:  true,
+			},
+		},
+	}
+
+	err := postApprovedFollowUpIssues(context.Background(), fc, "acme", "repo", 9, parsed, false, maxReviewFollowUpIssues, printer)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "duplicate detection")
+	assert.Empty(t, fc.CreatedIssues)
+	assert.Empty(t, fc.IssueComments)
+}
+
+func TestReviewFollowupIssueMarkerGolden(t *testing.T) {
+	finding := ReviewFinding{
+		Severity:    "low",
+		Category:    "docs",
+		File:        "README.md",
+		Line:        7,
+		Description: "Document the new flag.",
+		Actionable:  true,
+	}
+
+	assert.Equal(t,
+		"<!-- fullsend:review-follow-up:2dda9f082af27ccb771d0345fa8840f7f0ae71547ef1366c4bcfc87e48fdd20d -->",
+		reviewFollowupIssueMarker("acme", "repo", finding),
+	)
+}
+
+func TestCompactWhitespace(t *testing.T) {
+	assert.Equal(t, "one two three", compactWhitespace(" one\n\ttwo   three "))
+	assert.Equal(t, "", compactWhitespace(" \n\t "))
+}
+
+func TestTruncate(t *testing.T) {
+	assert.Equal(t, "", truncate("", 10))
+	assert.Equal(t, "", truncate("abcdef", 0))
+	assert.Equal(t, "ab", truncate("abcdef", 2))
+	assert.Equal(t, "ab...", truncate("abcdef", 5))
+	assert.Equal(t, "éé...", truncate("éééééé", 5))
+	assert.True(t, utf8.ValidString(truncate("abéé", 4)))
 }

@@ -1,10 +1,10 @@
 ---
 name: spec-start-github
 description: >-
-  Binds the headless spec-start workflow to GitHub: use a triage issue as the
-  canonical prompt, work on agent/<issue>-spec-* branches, commit planning
-  artifacts, then either open a PR locally or stop before push when a harness
-  post-script owns GitHub writes. Pair with the spec-start skill for procedure.
+  Use when a GitHub issue is the canonical prompt for a spec-start run: fetch
+  the issue, work on agent/<issue>-spec-* branches, commit planning artifacts,
+  then open a PR locally or stop before push when a harness post-script owns
+  GitHub writes. Pair with spec-start for the headless planning procedure.
 # Cursor Agent Skills: prefer explicit @-style invocation; other tooling may ignore.
 disable-model-invocation: true
 ---

@@ -12,6 +12,7 @@ import (
 	"io"
 	"math"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -49,6 +50,14 @@ func (c *LiveClient) WithBaseURL(url string) *LiveClient {
 type APIError struct {
 	StatusCode int
 	Message    string
+	Errors     []APIErrorDetail
+}
+
+// APIErrorDetail is one validation error entry returned by GitHub.
+type APIErrorDetail struct {
+	Resource string `json:"resource"`
+	Field    string `json:"field"`
+	Code     string `json:"code"`
 }
 
 func (e *APIError) Error() string {
@@ -164,10 +173,11 @@ func checkStatus(resp *http.Response, acceptable ...int) error {
 	data, _ := io.ReadAll(resp.Body)
 
 	var msg struct {
-		Message string `json:"message"`
+		Message string           `json:"message"`
+		Errors  []APIErrorDetail `json:"errors"`
 	}
 	if json.Unmarshal(data, &msg) == nil && msg.Message != "" {
-		return &APIError{StatusCode: resp.StatusCode, Message: msg.Message}
+		return &APIError{StatusCode: resp.StatusCode, Message: msg.Message, Errors: msg.Errors}
 	}
 	return &APIError{StatusCode: resp.StatusCode, Message: http.StatusText(resp.StatusCode)}
 }
@@ -1051,6 +1061,31 @@ func (c *LiveClient) RepoVariableExists(ctx context.Context, owner, repo, name s
 	return false, &APIError{StatusCode: resp.StatusCode, Message: "unexpected status checking variable"}
 }
 
+// GetRepoVariable returns the value of a repository Actions variable.
+// Returns ("", false, nil) if the variable does not exist.
+func (c *LiveClient) GetRepoVariable(ctx context.Context, owner, repo, name string) (string, bool, error) {
+	resp, err := c.do(ctx, http.MethodGet, fmt.Sprintf("/repos/%s/%s/actions/variables/%s", owner, repo, name), nil)
+	if err != nil {
+		return "", false, fmt.Errorf("get variable %s: %w", name, err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusNotFound {
+		return "", false, nil
+	}
+	if resp.StatusCode != http.StatusOK {
+		return "", false, &APIError{StatusCode: resp.StatusCode, Message: "unexpected status getting variable"}
+	}
+
+	var result struct {
+		Value string `json:"value"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return "", false, fmt.Errorf("decode variable %s: %w", name, err)
+	}
+	return result.Value, true, nil
+}
+
 // GetLatestWorkflowRun returns the most recent workflow run for a workflow file.
 func (c *LiveClient) GetLatestWorkflowRun(ctx context.Context, owner, repo, workflowFile string) (*forge.WorkflowRun, error) {
 	resp, err := c.get(ctx, fmt.Sprintf("/repos/%s/%s/actions/workflows/%s/runs?per_page=1", owner, repo, workflowFile))
@@ -1138,22 +1173,44 @@ func (c *LiveClient) DispatchWorkflow(ctx context.Context, owner, repo, workflow
 	return nil
 }
 
-// CreateIssue creates a new issue on a repository.
-func (c *LiveClient) CreateIssue(ctx context.Context, owner, repo, title, body string) (*forge.Issue, error) {
-	payload := map[string]string{"title": title, "body": body}
+// CreateIssue creates a new issue on a repository. Labels are best-effort:
+// if GitHub rejects the create because a label is unavailable in the target
+// repo, the request is retried without labels so issue creation still succeeds.
+func (c *LiveClient) CreateIssue(ctx context.Context, owner, repo, title, body string, labels ...string) (*forge.Issue, error) {
+	payload := map[string]any{"title": title, "body": body}
+	if len(labels) > 0 {
+		payload["labels"] = labels
+	}
 	resp, err := c.post(ctx, fmt.Sprintf("/repos/%s/%s/issues", owner, repo), payload)
 	if err != nil {
-		return nil, fmt.Errorf("create issue: %w", err)
+		var apiErr *APIError
+		if len(labels) == 0 || !errors.As(err, &apiErr) || !isValidationErrorForField(apiErr, "labels") {
+			return nil, fmt.Errorf("create issue: %w", err)
+		}
+		resp, err = c.post(ctx, fmt.Sprintf("/repos/%s/%s/issues", owner, repo), map[string]any{"title": title, "body": body})
+		if err != nil {
+			return nil, fmt.Errorf("create issue without labels after label rejection: %w", err)
+		}
 	}
 	var result struct {
 		Number  int    `json:"number"`
 		Title   string `json:"title"`
+		Body    string `json:"body"`
 		HTMLURL string `json:"html_url"`
+		Labels  []struct {
+			Name string `json:"name"`
+		} `json:"labels"`
 	}
 	if err := decodeJSON(resp, &result); err != nil {
 		return nil, fmt.Errorf("decode issue: %w", err)
 	}
-	return &forge.Issue{Number: result.Number, Title: result.Title, URL: result.HTMLURL}, nil
+	return &forge.Issue{
+		Number: result.Number,
+		Title:  result.Title,
+		Body:   result.Body,
+		URL:    result.HTMLURL,
+		Labels: labelNames(result.Labels),
+	}, nil
 }
 
 // CloseIssue closes an issue by number.
@@ -1164,6 +1221,79 @@ func (c *LiveClient) CloseIssue(ctx context.Context, owner, repo string, number 
 	}
 	resp.Body.Close()
 	return nil
+}
+
+func labelNames(labels []struct {
+	Name string `json:"name"`
+}) []string {
+	names := make([]string, 0, len(labels))
+	for _, label := range labels {
+		names = append(names, label.Name)
+	}
+	return names
+}
+
+func isValidationErrorForField(err *APIError, field string) bool {
+	if err == nil || err.StatusCode != http.StatusUnprocessableEntity {
+		return false
+	}
+	for _, detail := range err.Errors {
+		if detail.Field == field {
+			return true
+		}
+	}
+	return false
+}
+
+// ListOpenIssues returns open issues on a repository, excluding pull requests.
+// When labels are provided, GitHub filters to issues carrying those labels.
+func (c *LiveClient) ListOpenIssues(ctx context.Context, owner, repo string, labels ...string) ([]forge.Issue, error) {
+	var result []forge.Issue
+
+	for page := 1; page <= 100; page++ {
+		query := url.Values{}
+		query.Set("state", "open")
+		query.Set("per_page", "100")
+		query.Set("page", strconv.Itoa(page))
+		if len(labels) > 0 {
+			query.Set("labels", strings.Join(labels, ","))
+		}
+		resp, err := c.get(ctx, fmt.Sprintf("/repos/%s/%s/issues?%s", owner, repo, query.Encode()))
+		if err != nil {
+			return nil, fmt.Errorf("list open issues page %d: %w", page, err)
+		}
+		var raw []struct {
+			Number      int    `json:"number"`
+			Title       string `json:"title"`
+			Body        string `json:"body"`
+			HTMLURL     string `json:"html_url"`
+			PullRequest *struct {
+				URL string `json:"url"`
+			} `json:"pull_request"`
+			Labels []struct {
+				Name string `json:"name"`
+			} `json:"labels"`
+		}
+		if err := decodeJSON(resp, &raw); err != nil {
+			return nil, fmt.Errorf("decode open issues page %d: %w", page, err)
+		}
+		for _, item := range raw {
+			if item.PullRequest != nil {
+				continue
+			}
+			result = append(result, forge.Issue{
+				Number: item.Number,
+				Title:  item.Title,
+				Body:   item.Body,
+				URL:    item.HTMLURL,
+				Labels: labelNames(item.Labels),
+			})
+		}
+		if len(raw) < 100 {
+			break
+		}
+	}
+	return result, nil
 }
 
 // ListIssueComments returns all comments on an issue, paginating automatically.
@@ -1314,20 +1444,41 @@ func (c *LiveClient) GetPullRequestHeadSHA(ctx context.Context, owner, repo stri
 // review to that commit. GitHub rejects the request if the commit is
 // not the PR's current HEAD, closing the TOCTOU gap between the
 // stale-head check and review submission.
-func (c *LiveClient) CreatePullRequestReview(ctx context.Context, owner, repo string, number int, event, body, commitSHA string) error {
+// When comments is non-nil, inline diff comments are attached to the
+// review via the GitHub "comments" field.
+func (c *LiveClient) CreatePullRequestReview(ctx context.Context, owner, repo string, number int, event, body, commitSHA string, comments []forge.ReviewComment) error {
 	switch event {
 	case "APPROVE", "REQUEST_CHANGES", "COMMENT":
 	default:
 		return fmt.Errorf("create review on #%d: invalid event %q", number, event)
 	}
 
-	payload := map[string]string{
-		"event": event,
-		"body":  body,
+	type reviewComment struct {
+		Path string `json:"path"`
+		Line int    `json:"line,omitempty"`
+		Body string `json:"body"`
 	}
-	if commitSHA != "" {
-		payload["commit_id"] = commitSHA
+
+	type reviewPayload struct {
+		Event    string          `json:"event"`
+		Body     string          `json:"body"`
+		CommitID string          `json:"commit_id,omitempty"`
+		Comments []reviewComment `json:"comments,omitempty"`
 	}
+
+	payload := reviewPayload{
+		Event:    event,
+		Body:     body,
+		CommitID: commitSHA,
+	}
+	for _, rc := range comments {
+		payload.Comments = append(payload.Comments, reviewComment{
+			Path: rc.Path,
+			Line: rc.Line,
+			Body: rc.Body,
+		})
+	}
+
 	resp, err := c.post(ctx, fmt.Sprintf("/repos/%s/%s/pulls/%d/reviews", owner, repo, number), payload)
 	if err != nil {
 		return fmt.Errorf("create pull request review on #%d: %w", number, err)
