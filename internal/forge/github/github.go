@@ -1439,6 +1439,7 @@ func (c *LiveClient) GetPullRequestHeadSHA(ctx context.Context, owner, repo stri
 }
 
 // ListPullRequestFiles returns the file paths changed by a pull request.
+// GitHub caps PR file lists at 3000 files total regardless of pagination.
 func (c *LiveClient) ListPullRequestFiles(ctx context.Context, owner, repo string, number int) ([]string, error) {
 	var files []string
 	for page := 1; page <= 100; page++ {

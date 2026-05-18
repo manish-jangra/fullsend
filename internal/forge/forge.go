@@ -211,6 +211,8 @@ type Client interface {
 
 	// Pull request operations
 	GetPullRequestHeadSHA(ctx context.Context, owner, repo string, number int) (string, error)
+	// ListPullRequestFiles returns the relative file paths changed by a pull
+	// request. On GitHub, the API caps results at 3000 files total.
 	ListPullRequestFiles(ctx context.Context, owner, repo string, number int) ([]string, error)
 
 	// Pull request review operations.

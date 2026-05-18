@@ -303,25 +303,19 @@ func submitFormalReview(ctx context.Context, client forge.Client, owner, repo st
 	var diffFiles map[string]bool
 	if prFiles, err := client.ListPullRequestFiles(ctx, owner, repo, pr); err != nil {
 		printer.StepInfo(fmt.Sprintf("Could not list PR files (%v), inline comments may be rejected", err))
-	} else if len(prFiles) > 0 {
+	} else if len(prFiles) == 0 {
+		printer.StepInfo("PR file list is empty, inline comments disabled")
+	} else {
 		diffFiles = make(map[string]bool, len(prFiles))
 		for _, f := range prFiles {
 			diffFiles[f] = true
 		}
 	}
 
-	inlineComments := findingsToReviewComments(findings, diffFiles)
+	inlineComments, diffFiltered := findingsToReviewComments(findings, diffFiles)
 
-	if diffFiles != nil {
-		eligible := 0
-		for _, f := range findings {
-			if f.File != "" && f.Line > 0 {
-				eligible++
-			}
-		}
-		if filtered := eligible - len(inlineComments); filtered > 0 {
-			printer.StepWarn(fmt.Sprintf("%d finding(s) omitted: file not in PR diff", filtered))
-		}
+	if diffFiltered > 0 {
+		printer.StepWarn(fmt.Sprintf("%d finding(s) omitted: file not in PR diff", diffFiltered))
 	}
 
 	var reviewBody string
@@ -348,13 +342,17 @@ func submitFormalReview(ctx context.Context, client forge.Client, owner, repo st
 // or line number are omitted — they remain in the sticky comment body.
 // When diffFiles is non-nil, findings referencing files outside the PR
 // diff are also omitted to avoid GitHub 422 errors.
-func findingsToReviewComments(findings []ReviewFinding, diffFiles map[string]bool) []forge.ReviewComment {
+// Returns the comments and the count of findings dropped because their
+// file was not in the diff.
+func findingsToReviewComments(findings []ReviewFinding, diffFiles map[string]bool) ([]forge.ReviewComment, int) {
 	var comments []forge.ReviewComment
+	var diffFiltered int
 	for _, f := range findings {
 		if f.File == "" || f.Line <= 0 {
 			continue
 		}
 		if diffFiles != nil && !diffFiles[f.File] {
+			diffFiltered++
 			continue
 		}
 		comments = append(comments, forge.ReviewComment{
@@ -363,7 +361,7 @@ func findingsToReviewComments(findings []ReviewFinding, diffFiles map[string]boo
 			Body: formatFindingComment(f),
 		})
 	}
-	return comments
+	return comments, diffFiltered
 }
 
 // formatFindingComment renders a single review finding as a Markdown

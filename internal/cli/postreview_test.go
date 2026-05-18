@@ -707,7 +707,8 @@ func TestFindingsToReviewComments(t *testing.T) {
 		{File: "c.go", Line: 20, Severity: "critical", Category: "security", Description: "Desc C", Remediation: "Fix it"},
 	}
 
-	comments := findingsToReviewComments(findings, nil)
+	comments, filtered := findingsToReviewComments(findings, nil)
+	assert.Equal(t, 0, filtered)
 	require.Len(t, comments, 2)
 
 	assert.Equal(t, "a.go", comments[0].Path)
@@ -732,7 +733,8 @@ func TestFindingsToReviewComments_FiltersByDiffFiles(t *testing.T) {
 		"also-changed.go": true,
 	}
 
-	comments := findingsToReviewComments(findings, diffFiles)
+	comments, filtered := findingsToReviewComments(findings, diffFiles)
+	assert.Equal(t, 1, filtered)
 	require.Len(t, comments, 2)
 	assert.Equal(t, "changed.go", comments[0].Path)
 	assert.Equal(t, "also-changed.go", comments[1].Path)
@@ -777,6 +779,27 @@ func TestSubmitFormalReview_ListPRFilesErrorFallsBack(t *testing.T) {
 	require.Len(t, fc.CreatedReviews, 1)
 	require.Len(t, fc.CreatedReviews[0].Comments, 1, "all comments should pass through when ListPullRequestFiles fails")
 	assert.Equal(t, "any-file.go", fc.CreatedReviews[0].Comments[0].Path)
+}
+
+func TestSubmitFormalReview_EmptyPRFileListFallsBack(t *testing.T) {
+	fc := forge.NewFakeClient()
+	fc.AuthenticatedUser = "fullsend-bot"
+	fc.PRFiles = map[string][]string{
+		"acme/repo/1": {},
+	}
+	var out bytes.Buffer
+	printer := ui.New(&out)
+
+	findings := []ReviewFinding{
+		{File: "any-file.go", Line: 10, Severity: "high", Category: "bug", Description: "Should pass through"},
+	}
+
+	err := submitFormalReview(context.Background(), fc, "acme", "repo", 1, "request-changes", "", "", findings, false, printer)
+	require.NoError(t, err)
+	require.Len(t, fc.CreatedReviews, 1)
+	// When PR file list is empty, filtering is disabled — all comments pass through unfiltered.
+	require.Len(t, fc.CreatedReviews[0].Comments, 1, "comments pass through unfiltered when PR file list is empty")
+	assert.Contains(t, out.String(), "PR file list is empty")
 }
 
 func TestFormatFindingComment(t *testing.T) {
