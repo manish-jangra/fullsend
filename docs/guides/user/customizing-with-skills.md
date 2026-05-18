@@ -1,12 +1,12 @@
 # Customizing Agents with Skills
 
-Fullsend agents use [agent skills](https://agentskills.org/) — self-contained
-markdown documents that teach an agent how to perform a specific task. Each OOTB
-agent ships with built-in skills, and you can extend or replace them by
+Fullsend agents use [agent skills](https://agentskills.io/) — self-contained
+markdown documents that teach an agent how to perform a specific task. Each
+default agent ships with built-in skills, and you can extend or replace them by
 committing your own skills to your repository.
 
 For general project-wide instructions (code style, test conventions,
-architecture rules), see [Customizing with CLAUDE.md](customizing-with-claude-md.md).
+architecture rules), see [Customizing with AGENTS.md](customizing-with-agents-md.md).
 This guide covers skills specifically.
 
 ## What is a skill?
@@ -78,17 +78,17 @@ your-repo/
   .claude/skills -> ../.agents/skills
 ```
 
-## Skill shadowing
+## Skill overloading
 
-Each fullsend agent ships with built-in skills. You can **shadow** any of
+Each fullsend agent ships with built-in skills. You can **overload** any of
 these by providing your own skill with the same name. Your version replaces
 the built-in one at runtime — no other configuration needed.
 
-This is the most precise way to tune agent behavior. A shadowed skill is only
-loaded by the agent that uses it, unlike `CLAUDE.md` instructions which are
+This is the most precise way to tune agent behavior. An overloaded skill is only
+loaded by the agent that uses it, unlike `AGENTS.md` instructions which are
 loaded by every agent.
 
-### How shadowing works
+### How overloading works
 
 Fullsend uses a layered content resolution model
 ([ADR 0035](../../ADRs/0035-layered-content-resolution.md)). At runtime, the
@@ -96,13 +96,13 @@ agent's workspace is assembled by copying upstream defaults first, then
 overlaying org-level customizations on top. When you provide a skill with the
 same name as a built-in one, yours wins.
 
-To shadow a skill, create it in your `.fullsend` config repo at
+To overload a skill, create it in your `.fullsend` config repo at
 `customized/skills/<skill-name>/SKILL.md`. The directory name must match the
 built-in skill name exactly.
 
 ### Built-in skills
 
-These skills ship with fullsend and can be shadowed:
+These skills ship with fullsend and can be overloaded:
 
 | Agent | Skill | Purpose |
 |-------|-------|---------|
@@ -114,28 +114,22 @@ These skills ship with fullsend and can be shadowed:
 
 ### Extension points
 
-These skill names are recognized by agents but do not ship with fullsend. You
-provide them to unlock additional agent capabilities:
+Some agents recognize skill names that do not ship with fullsend. Providing
+these unlocks additional capabilities. See each agent's documentation for the
+skills it supports — for example, the
+[prioritize agent](../../agents/prioritize.md) uses a `customer-research` skill
+when available.
 
-| Agent | Skill | Purpose |
-|-------|-------|---------|
-| [Prioritize](../../agents/prioritize.md) | `customer-research` | Customer data gathering for RICE scoring |
-
-See each agent's documentation for concrete examples.
-
-## When to use skills vs. CLAUDE.md
+## When to use skills vs. AGENTS.md
 
 Use **skills** when you need to change how a specific agent performs a specific
 task — especially when the customization involves domain knowledge, helper
 scripts, or external data sources that only one agent needs.
 
-Use **[CLAUDE.md](customizing-with-claude-md.md)** for broad instructions that
+Use **[AGENTS.md](customizing-with-agents-md.md)** for broad instructions that
 apply to all agents and human contributors alike.
 
 ## What not to do
 
-- **Don't put secrets in skills.** They're committed to your repo. Use
-  environment variables for anything sensitive — skills can reference
-  `$ENV_VAR` in their scripts.
-- **Don't duplicate CLAUDE.md content in skills.** If an instruction applies
-  to all agents, put it in `CLAUDE.md`. Skills are for agent-specific behavior.
+- **Don't duplicate AGENTS.md content in skills.** If an instruction applies
+  to all agents, put it in `AGENTS.md`. Skills are for agent-specific behavior.

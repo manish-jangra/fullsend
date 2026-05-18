@@ -1,27 +1,24 @@
-# Customizing Agents with CLAUDE.md
+# Customizing Agents with AGENTS.md
 
 Fullsend agents operate on your repository using Claude Code inside a sandboxed
 environment. Because agents run with your repo checked out, they automatically
-read your `CLAUDE.md` file — the same file human contributors use. No fullsend
+read your `AGENTS.md` file — the same file human contributors use. No fullsend
 configuration changes needed.
 
 For agent-specific customization using skills, see
 [Customizing with Skills](customizing-with-skills.md).
 
-## What to put in CLAUDE.md
+## What to put in AGENTS.md
 
-The recommended approach is to put agent instructions in an `AGENTS.md` file
-and have your `CLAUDE.md` include it:
+`AGENTS.md` is the [open standard](https://agentskills.io/) that any agent
+tool can discover. The recommended approach is to keep your `CLAUDE.md`
+lightweight and have it point at `AGENTS.md`:
 
 ```markdown
 # CLAUDE.md
 
 See AGENTS.md for contributor conventions (human and agent alike).
 ```
-
-This keeps `CLAUDE.md` lightweight and makes your conventions portable across
-agent runtimes. `AGENTS.md` is the
-[open standard](https://agentskills.org/) that any agent tool can discover.
 
 Add instructions that apply to anyone (human or agent) working in your repo:
 
@@ -93,7 +90,7 @@ Your repo has a complex domain model and triage often miscategorizes issues:
 ## What not to do
 
 - **Don't write agent-specific instructions.** All agents read the same
-  `CLAUDE.md`, so write instructions as if they're for any contributor.
+  `AGENTS.md`, so write instructions as if they're for any contributor.
   This is a feature — the same conventions apply to humans and agents alike.
 - **Don't put label glossaries or skill-specific knowledge here.** That
   bloats context for every agent. Use
