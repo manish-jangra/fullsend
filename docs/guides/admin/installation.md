@@ -336,7 +336,7 @@ When a platform operator has pre-provisioned shared public GitHub Apps and a tok
 - **Repository enrollment prerequisites** — enrolling a new repository to an existing mint may require coordination with the platform operator to ensure:
   - Your organization is registered in the mint's `ALLOWED_ORGS` configuration
   - The mint has the necessary GitHub App PEMs stored in Secret Manager
-  - Workload Identity Federation (WIF) is configured to accept tokens from your organization
+  - Workload Identity Federation (WIF) is configured to accept tokens from your organization or repository
 
 **Recommended: Assisted installation**
 
@@ -382,7 +382,7 @@ fullsend admin install "$ORG_NAME/$REPO_NAME" \
 This assumes:
 - The shared GitHub Apps are already installed on your repository
 - Your organization is registered in the mint's `ALLOWED_ORGS`
-- WIF is configured to accept tokens from your repository
+- WIF is configured to accept tokens from your organization or repository
 - All PEMs are stored in Secret Manager
 
 The installer skips all app discovery, mint validation, and GCP provisioning — it only generates workflow files and sets repository variables.
