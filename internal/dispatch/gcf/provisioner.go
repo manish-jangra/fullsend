@@ -677,16 +677,18 @@ func (p *Provisioner) provisionSelfManaged(ctx context.Context) (map[string]stri
 	allOrgs := make([]string, len(p.cfg.GitHubOrgs))
 	copy(allOrgs, p.cfg.GitHubOrgs)
 	existingProvider, getErr := p.gcpAPI.GetWIFProvider(ctx, projectNumber, p.cfg.WIFPoolName, p.cfg.WIFProvider)
-	if getErr == nil && existingProvider != nil {
+	if getErr != nil {
+		log.Printf("warning: could not read existing WIF provider for merge (proceeding with installing orgs only): %v", getErr)
+	} else if existingProvider != nil {
 		existingOrgs := parseConditionOrgs(existingProvider.AttributeCondition)
-		seen := make(map[string]bool)
+		merged := make(map[string]bool)
 		for _, org := range allOrgs {
-			seen[org] = true
+			merged[org] = true
 		}
 		for _, org := range existingOrgs {
-			if !seen[org] {
+			if !merged[org] {
 				allOrgs = append(allOrgs, org)
-				seen[org] = true
+				merged[org] = true
 			}
 		}
 		sort.Strings(allOrgs)
@@ -1064,10 +1066,10 @@ func parseConditionOrgs(condition string) []string {
 		if strings.HasSuffix(part, fullsendRepoSuffix) {
 			org := strings.TrimSuffix(part, fullsendRepoSuffix)
 			if githubOrgPattern.MatchString(org) {
-				orgs = append(orgs, org)
+				orgs = append(orgs, strings.ToLower(org))
 			}
 		} else if githubOrgPattern.MatchString(part) {
-			orgs = append(orgs, part)
+			orgs = append(orgs, strings.ToLower(part))
 		}
 	}
 	return orgs
@@ -1139,7 +1141,7 @@ func (p *Provisioner) ProvisionWIF(ctx context.Context) (wifProvider string, err
 	orgs := make([]string, len(p.cfg.GitHubOrgs))
 	seen := make(map[string]bool)
 	for i, org := range p.cfg.GitHubOrgs {
-		if !githubOrgPattern.MatchString(org) {
+		if !githubOrgPattern.MatchString(org) || strings.Contains(org, "--") {
 			return "", fmt.Errorf("invalid GitHub org name: %q", org)
 		}
 		lower := strings.ToLower(org)
@@ -1170,16 +1172,18 @@ func (p *Provisioner) ProvisionWIF(ctx context.Context) (wifProvider string, err
 		allOrgs := make([]string, len(orgs))
 		copy(allOrgs, orgs)
 		existingProvider, getErr := p.gcpAPI.GetWIFProvider(ctx, projectNumber, p.cfg.WIFPoolName, p.cfg.WIFProvider)
-		if getErr == nil && existingProvider != nil {
+		if getErr != nil {
+			log.Printf("warning: could not read existing WIF provider for merge (proceeding with installing orgs only): %v", getErr)
+		} else if existingProvider != nil {
 			existingOrgs := parseConditionOrgs(existingProvider.AttributeCondition)
-			seen := make(map[string]bool)
+			merged := make(map[string]bool)
 			for _, org := range allOrgs {
-				seen[org] = true
+				merged[org] = true
 			}
 			for _, org := range existingOrgs {
-				if !seen[org] {
+				if !merged[org] {
 					allOrgs = append(allOrgs, org)
-					seen[org] = true
+					merged[org] = true
 				}
 			}
 			sort.Strings(allOrgs)
