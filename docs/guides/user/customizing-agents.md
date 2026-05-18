@@ -48,17 +48,31 @@ validation_loop:                 # Iterative validation
 
 security:
   enabled: true
-  fail_mode: closed              # Block on security failure
-  host_scanners:
-    - llm-guard                  # ML-based content scanning
-    - tirith                     # Terminal security
-  sandbox_hooks:
-    - injection-detect           # Prompt injection detection
-    - ssrf-validate              # SSRF prevention
-    - unicode-normalize          # Unicode attack normalization
-    - secret-redact              # Secret leak prevention
-  escalation: block              # Action on security violation
-  trace: true                    # Enable security event tracing
+  fail_mode: closed              # "closed" (default) or "open"
+  host_scanners:                 # Scanners run before sandbox creation
+    unicode_normalizer: true     # Strip invisible chars, NFKC normalization
+    context_injection: true      # Detect prompt injection patterns
+    ssrf_validator: true         # Check URLs in payloads
+    secret_redactor: true        # Redact secrets from input
+    llm_guard:                   # ML-based injection detection
+      enabled: true
+      threshold: 0.92
+      match_type: sentence       # "sentence" or "full"
+  sandbox_hooks:                 # Hooks during agent execution
+    tirith:                      # Terminal security scanner
+      enabled: true
+      fail_on: high              # "critical", "high", or "medium"
+    ssrf_pretool: true           # SSRF check before tool use
+    secret_redact_posttool: true # Redact secrets after tool use
+    unicode_posttool: true       # Unicode normalization after tool use
+    context_suppress_posttool: true  # Suppress context in error messages
+    canary_pretool: true         # Canary injection detection
+    canary_posttool: true        # Canary leakage detection
+  escalation:                    # Action on critical findings
+    on_critical: halt            # "halt" or "review"
+    review_label: requires-manual-review
+  trace:                         # Trace ID for correlation
+    enabled: true
 ```
 
 ## Layered Configuration Resolution
