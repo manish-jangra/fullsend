@@ -10,10 +10,16 @@ fullsend
 │   ├── install     # Per-org or per-repo infrastructure setup
 │   ├── uninstall   # Tear down infrastructure (reverse layer order)
 │   ├── analyze     # Health check: inspect installed state
-│   ├── enable      # Enable agent on repos (per-org mode)
-│   └── disable     # Disable agent on repos (per-org mode)
+│   ├── enable
+│   │   └── repos   # Enable agent on repos (per-org mode)
+│   └── disable
+│       └── repos   # Disable agent on repos (per-org mode)
 ├── run             # Execute an agent in a sandbox
 ├── scan            # Run security scanner on input/output
+│   ├── input       # Scan event payload for prompt injection
+│   ├── output      # Scan agent output for secrets
+│   ├── context     # Scan context files for injection
+│   └── url         # Validate URLs for SSRF
 ├── post-review     # Post PR review comments to GitHub
 └── post-comment    # Post issue/PR comments to GitHub
 ```
@@ -439,21 +445,21 @@ var executableFiles = map[string]struct{}{
 
 | File | Lines | Purpose |
 |------|-------|---------|
-| `internal/cli/root.go` | ~50 | CLI entry point, command registration |
+| `internal/cli/root.go` | ~34 | CLI entry point, command registration |
 | `internal/cli/admin.go` | ~2415 | Install/uninstall/analyze/enable/disable |
 | `internal/cli/run.go` | ~1923 | Agent execution lifecycle |
 | `internal/mint/main.go` | ~906 | GCF token mint service |
 | `internal/dispatch/gcf/provisioner.go` | ~1350 | GCP infrastructure provisioner |
 | `internal/sandbox/sandbox.go` | ~459 | OpenShell sandbox operations |
 | `internal/harness/harness.go` | ~486 | Harness YAML parsing |
-| `internal/layers/layers.go` | ~100 | Layer interface and stack |
+| `internal/layers/layers.go` | ~159 | Layer interface and stack |
 | `internal/layers/secrets.go` | ~200 | PEM key deployment layer |
 | `internal/layers/inference.go` | ~150 | Inference credential layer |
-| `internal/layers/dispatch.go` | ~250 | Mint URL deployment layer |
+| `internal/layers/dispatch.go` | ~364 | Mint URL deployment layer |
 | `internal/scaffold/scaffold.go` | ~146 | Embedded template system |
 | `internal/inference/inference.go` | ~26 | Provider interface |
 | `internal/inference/vertex/vertex.go` | ~80 | Vertex AI implementation |
-| `internal/config/config.go` | ~200 | Org/repo config structures |
+| `internal/config/config.go` | ~264 | Org/repo config structures |
 
 ## See Also
 

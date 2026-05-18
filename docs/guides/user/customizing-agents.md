@@ -19,17 +19,12 @@ skills:                          # Skills loaded into agent
   - skills/git.md
   - skills/github-pr.md
 
-plugins:                         # MCP plugins
-  - name: github
-    config: plugins/github.json
+plugins:                         # MCP plugins (list of plugin names)
+  - github
+  - sourcebot
 
-providers:                       # Inference providers
-  - name: vertex
-    type: vertex
-    credentials: wif
-    config:
-      project: ${FULLSEND_GCP_PROJECT_ID}
-      region: ${FULLSEND_GCP_REGION}
+providers:                       # Inference providers (list of provider names)
+  - vertex
 
 host_files:                      # Files copied into sandbox
   - src: ${GITHUB_WORKSPACE}/.fullsend/customized/scripts/
@@ -42,9 +37,9 @@ host_files:                      # Files copied into sandbox
 pre_script: scripts/pre-code.sh    # Runs on host before agent
 post_script: scripts/post-code.sh  # Runs on host after agent
 
-runner_env:                      # Env vars passed to runner
-  - GITHUB_TOKEN
-  - FULLSEND_OUTPUT_DIR
+runner_env:                      # Env vars passed to runner (key-value map)
+  GITHUB_TOKEN: ""
+  FULLSEND_OUTPUT_DIR: ""
 
 validation_loop:                 # Iterative validation
   script: scripts/validate-output-schema.sh
