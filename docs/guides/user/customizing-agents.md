@@ -165,7 +165,7 @@ To add a custom skill to the code agent's harness:
    # Create your custom skill
    cat > .fullsend/customized/skills/my-custom-validation.md <<'EOF'
    # My Custom Validation Skill
-   
+
    [Your skill content...]
    EOF
    ```
