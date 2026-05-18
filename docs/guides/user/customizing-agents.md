@@ -8,69 +8,79 @@ Each agent run is configured by a harness YAML file that defines the complete ex
 
 ### Harness YAML Structure
 
+A minimal harness configuration (based on actual fullsend agent harnesses):
+
 ```yaml
-agent: agents/coder.md           # Agent definition (Claude agent file)
-image: ghcr.io/fullsend/sandbox  # Container image for sandbox
-model: claude-sonnet-4-6         # Inference model
-policy: policies/coder.yaml      # Security policy
-timeout_minutes: 30              # Max execution time
+agent: agents/code.md
+model: opus
+image: ghcr.io/fullsend-ai/fullsend-code:latest
+policy: policies/code.yaml
+timeout_minutes: 35
 
-skills:                          # Skills loaded into agent
-  - skills/git.md
-  - skills/github-pr.md
+skills:
+  - skills/code-implementation
 
-plugins:                         # Claude Code plugins (list of plugin names)
+plugins:
   - plugins/gopls-lsp
 
-providers:                       # Inference providers (list of provider names)
-  - vertex
-
-host_files:                      # Files copied into sandbox
-  - src: ${GITHUB_WORKSPACE}/.fullsend/customized/scripts/
-    dest: /tmp/workspace/scripts/
+host_files:
+  - src: env/gcp-vertex.env
+    dest: /tmp/workspace/.env.d/gcp-vertex.env
+    expand: true
+  - src: ${GOOGLE_APPLICATION_CREDENTIALS}
+    dest: /tmp/workspace/.gcp-credentials.json
+  - src: ${GCP_OIDC_TOKEN_FILE}
+    dest: /tmp/workspace/.gcp-oidc-token
     optional: true
-  - src: configs/tool-config.json
-    dest: /tmp/workspace/.config/tool-config.json
-    expand: true                 # Expand ${VAR} in file content
 
-pre_script: scripts/pre-code.sh    # Runs on host before agent
-post_script: scripts/post-code.sh  # Runs on host after agent
+pre_script: scripts/pre-code.sh
+post_script: scripts/post-code.sh
 
-runner_env:                      # Env vars passed to runner (key-value map)
-  GITHUB_TOKEN: "${GH_TOKEN}"
-  FULLSEND_OUTPUT_DIR: "${RUNNER_TEMP}/output"
-
-validation_loop:                 # Iterative validation
+validation_loop:
   script: scripts/validate-output-schema.sh
-  max_iterations: 3
-  feedback_mode: stderr          # Feed script stderr as feedback
+  max_iterations: 2
 
-security:
-  enabled: true
-  fail_mode: closed              # "closed" (default) or "open"
-  host_scanners:                 # Scanners run before sandbox creation
-    unicode_normalizer: true     # Strip invisible chars, NFKC normalization
-    context_injection: true      # Detect prompt injection patterns
-    ssrf_validator: true         # Check URLs in payloads
-    secret_redactor: true        # Redact secrets from input
-    llm_guard:                   # ML-based injection detection
+runner_env:
+  PUSH_TOKEN: "${PUSH_TOKEN}"
+  REPO_FULL_NAME: "${REPO_FULL_NAME}"
+  REPO_DIR: "${GITHUB_WORKSPACE}/target-repo"
+```
+
+**Optional fields** (all have secure defaults and can be omitted):
+
+```yaml
+providers:                       # Inference providers (loaded from providers/ dir)
+  - vertex                       # References providers/vertex.yaml
+
+validation_loop:
+  feedback_mode: stderr          # "stderr", "stdout", or "exit_code" (optional)
+
+security:                        # Security is enabled by default with fail_mode: closed
+  enabled: true                  # All scanners enabled by default
+  fail_mode: closed              # "closed" (reject on failure) or "open" (warn only)
+  host_scanners:
+    unicode_normalizer: true
+    context_injection: true
+    ssrf_validator: true
+    secret_redactor: true
+    llm_guard:
       enabled: true
       threshold: 0.92
-      match_type: sentence       # "sentence" or "full"
-  sandbox_hooks:                 # Hooks during agent execution
-    tirith:                      # Terminal security scanner
+      match_type: sentence
+  sandbox_hooks:
+    tirith:
       enabled: true
       fail_on: high              # "critical", "high", or "medium"
-    ssrf_pretool: true           # SSRF check before tool use
-    secret_redact_posttool: true # Redact secrets after tool use
-    unicode_posttool: true       # Unicode normalization after tool use
-    context_suppress_posttool: true  # Suppress context in error messages
-    canary_pretool: true         # Canary injection detection
-    canary_posttool: true        # Canary leakage detection
-  escalation:                    # Action on critical findings
+    ssrf_pretool: true
+    secret_redact_posttool: true
+    unicode_posttool: true
+    context_suppress_posttool: true
+    canary_pretool: true
+    canary_posttool: true
+  escalation:
     on_critical: halt            # "halt" or "review"
     review_label: requires-manual-review
-  trace:                         # Trace ID for correlation
+  trace:
     enabled: true
 ```
 
@@ -178,7 +188,7 @@ The skill will be automatically available to all agents that include `skills/my-
 
 ### Overriding an Agent Definition
 
-Create `.fullsend/customized/agents/coder.md` to override the default coder agent with org-specific instructions:
+Create `.fullsend/customized/agents/code.md` to override the default code agent with org-specific instructions:
 
 ```markdown
 # Code Agent (Customized)
@@ -191,15 +201,14 @@ Create `.fullsend/customized/agents/coder.md` to override the default coder agen
 Create `.fullsend/customized/harness/coder.yaml` to modify the coder agent's execution environment:
 
 ```yaml
-# Extend the upstream coder harness
-agent: agents/coder.md
-model: claude-opus-4-6  # Use Opus instead of Sonnet
+# Extend the upstream code harness
+agent: agents/code.md
+model: claude-opus-4-6  # Use Opus instead of default
 timeout_minutes: 45     # Increase timeout for complex tasks
 
 # Add org-specific skills
 skills:
-  - skills/git.md
-  - skills/github-pr.md
+  - skills/code-implementation
   - skills/my-custom-linting.md  # Org-specific skill
 
 # Custom validation
@@ -216,9 +225,9 @@ Target repos can override org-level customizations by placing files in `.fullsen
 my-repo/
 ├── .fullsend/
 │   └── customized/
-│       ├── agents/coder.md        # Repo-specific agent instructions
+│       ├── agents/code.md         # Repo-specific agent instructions
 │       ├── skills/repo-skill.md   # Repo-specific skill
-│       └── harness/coder.yaml     # Repo-specific harness config
+│       └── harness/code.yaml      # Repo-specific harness config
 ```
 
 ## See Also
