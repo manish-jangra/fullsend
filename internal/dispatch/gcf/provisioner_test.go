@@ -1842,6 +1842,19 @@ func TestProvisionWIF_RepoScoped_DotPrefixRepo(t *testing.T) {
 	assert.Equal(t, "assertion.repository == 'nonflux/.fullsend'", fake.lastWIFProviderConfig.AttributeCondition)
 }
 
+func TestProvisionWIF_RepoScoped_ErrorPreservesOriginalCase(t *testing.T) {
+	fake := newFakeGCFClient()
+	p := NewProvisioner(Config{
+		ProjectID:  "my-project",
+		GitHubOrgs: []string{"acme"},
+		Repo:       "Owner.Name/Repo",
+	}, fake)
+
+	_, err := p.ProvisionWIF(context.Background())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "Owner.Name", "error should show original casing, not lowercased")
+}
+
 func TestProvisionWIF_RepoScoped_DoesNotTouchSharedProvider(t *testing.T) {
 	fake := newFakeGCFClient()
 	fake.wifProvider = &WIFProviderInfo{
@@ -1891,6 +1904,8 @@ func TestProvisionWIF_RepoScoped_RejectsInvalidRepo(t *testing.T) {
 		{"dot as repo", "owner/.", "cannot be"},
 		{"dotdot as repo", "owner/..", "cannot be"},
 		{"dot as owner", "./repo", "invalid repo owner"},
+		{"double-hyphen in owner", "org--name/repo", "invalid repo owner"},
+		{"git suffix", "owner/repo.git", "cannot end with"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

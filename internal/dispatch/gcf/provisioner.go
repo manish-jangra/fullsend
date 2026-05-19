@@ -1195,17 +1195,21 @@ func (p *Provisioner) ProvisionWIF(ctx context.Context) (wifProvider string, err
 		// Each repo gets a unique provider ID (via BuildRepoProviderID),
 		// so no risk of clobbering another repo's WIF condition.
 		parts := strings.SplitN(repo, "/", 2)
+		origParts := strings.SplitN(p.cfg.Repo, "/", 2)
 		if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
 			return "", fmt.Errorf("repo must be in owner/repo format, got %q", p.cfg.Repo)
 		}
 		if !githubOrgPattern.MatchString(parts[0]) || strings.Contains(parts[0], "--") {
-			return "", fmt.Errorf("invalid repo owner %q: must be a valid GitHub org/user name", parts[0])
+			return "", fmt.Errorf("invalid repo owner %q: must be a valid GitHub org/user name", origParts[0])
 		}
 		if !githubRepoSlugPattern.MatchString(parts[1]) {
-			return "", fmt.Errorf("invalid repo name %q: must contain only alphanumeric, hyphens, dots, or underscores", parts[1])
+			return "", fmt.Errorf("invalid repo name %q: must contain only alphanumeric, hyphens, dots, or underscores", origParts[1])
 		}
 		if parts[1] == "." || parts[1] == ".." {
-			return "", fmt.Errorf("invalid repo name %q: cannot be \".\" or \"..\"", parts[1])
+			return "", fmt.Errorf("invalid repo name %q: cannot be \".\" or \"..\"", origParts[1])
+		}
+		if strings.HasSuffix(parts[1], ".git") {
+			return "", fmt.Errorf("invalid repo name %q: cannot end with \".git\"", origParts[1])
 		}
 		var err error
 		projectNumber, err = p.gcpAPI.GetProjectNumber(ctx, p.cfg.ProjectID)
