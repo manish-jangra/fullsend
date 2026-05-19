@@ -25,12 +25,32 @@ const (
 )
 
 func sanitizeDownload(localDir string) error {
-	return filepath.WalkDir(localDir, func(path string, d fs.DirEntry, err error) error {
+	absLocal, err := filepath.Abs(localDir)
+	if err != nil {
+		return err
+	}
+	absLocal = filepath.Clean(absLocal)
+
+	return filepath.WalkDir(absLocal, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
 		if d.Type()&fs.ModeSymlink != 0 {
-			return os.Remove(path)
+			target, readErr := os.Readlink(path)
+			if readErr != nil {
+				return os.Remove(path)
+			}
+			// Absolute targets always point outside the repo root.
+			if filepath.IsAbs(target) {
+				return os.Remove(path)
+			}
+			// Resolve the relative target against the symlink's directory and
+			// remove if it escapes the repo root.
+			resolved := filepath.Clean(filepath.Join(filepath.Dir(path), target))
+			if !strings.HasPrefix(resolved+string(filepath.Separator), absLocal+string(filepath.Separator)) {
+				return os.Remove(path)
+			}
+			return nil
 		}
 
 		if d.IsDir() && d.Name() == "hooks" && filepath.Base(filepath.Dir(path)) == ".git" {
