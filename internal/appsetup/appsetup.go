@@ -242,9 +242,13 @@ func (s *Setup) Run(ctx context.Context, org, role string) (*AppCredentials, err
 		// Resolve AppID from the installation so ROLE_APP_IDS gets updated.
 		if recovered.AppID == 0 {
 			inst, found, err := s.findExistingInstallation(ctx, org, role, recovered.Slug)
-			if err == nil && found {
-				recovered.AppID = inst.AppID
+			if err != nil {
+				return nil, fmt.Errorf("looking up recovered app installation: %w", err)
 			}
+			if !found {
+				return nil, fmt.Errorf("recovered app %s was installed but not found in installations list", recovered.Slug)
+			}
+			recovered.AppID = inst.AppID
 		}
 		return recovered, nil
 	}
@@ -260,13 +264,13 @@ func (s *Setup) Run(ctx context.Context, org, role string) (*AppCredentials, err
 	}
 	if lookupErr == nil {
 		if !s.publicApps {
-			s.ui.StepDone(fmt.Sprintf("Found existing public app: %s", slug))
-			install, confirmErr := s.prompter.Confirm(fmt.Sprintf("Public app %s already exists — install it into %s?", slug, org))
+			s.ui.StepInfo(fmt.Sprintf("Found existing app: %s", slug))
+			install, confirmErr := s.prompter.Confirm(fmt.Sprintf("App %s already exists — install it into %s?", slug, org))
 			if confirmErr != nil {
-				return nil, fmt.Errorf("confirming public app install: %w", confirmErr)
+				return nil, fmt.Errorf("confirming app install: %w", confirmErr)
 			}
 			if !install {
-				return nil, fmt.Errorf("app %s already exists as a public app; use --public to install it, or choose a different --app-set", slug)
+				return nil, fmt.Errorf("app %s already exists; use --public to install it, or choose a different --app-set", slug)
 			}
 		}
 		if err := s.ensureInstalled(ctx, org, slug); err != nil {

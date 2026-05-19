@@ -30,6 +30,7 @@ import (
 
 type fakePrompter struct {
 	confirmResult  bool
+	confirmErr     error
 	waitCalled     bool
 	confirmCalled  bool
 	readLineResult string
@@ -43,7 +44,7 @@ func (f *fakePrompter) WaitForEnter(_ string) error {
 
 func (f *fakePrompter) Confirm(_ string) (bool, error) {
 	f.confirmCalled = true
-	return f.confirmResult, nil
+	return f.confirmResult, f.confirmErr
 }
 
 func (f *fakePrompter) ReadLine(_ string) (string, error) {
@@ -373,6 +374,7 @@ func TestSetup_PublicApp_NotInstalledYet_InstallsRatherThanCreates(t *testing.T)
 	assert.Equal(t, "Iv1.public123", creds.ClientID)
 	assert.Equal(t, 42, creds.AppID)
 	assert.Empty(t, creds.PEM, "no PEM expected for reused public app")
+	assert.False(t, prompter.confirmCalled, "should not prompt when --public is set")
 }
 
 func TestSetup_PublicApp_NotInstalledYet_FallsThroughToCreateWhenNotFound(t *testing.T) {
@@ -469,9 +471,53 @@ func TestSetup_PublicAppFound_WithoutFlag_UserDeclines(t *testing.T) {
 	require.Error(t, err)
 
 	assert.True(t, prompter.confirmCalled, "user should be prompted")
-	assert.Contains(t, err.Error(), "already exists as a public app")
+	assert.Contains(t, err.Error(), "already exists")
 	assert.Contains(t, err.Error(), "--public")
 	assert.Contains(t, err.Error(), "--app-set")
+}
+
+func TestSetup_PublicAppFound_WithoutFlag_ConfirmError(t *testing.T) {
+	// --public NOT set, app exists globally, prompter returns error.
+	client := &forge.FakeClient{
+		Installations: []forge.Installation{},
+		AppClientIDs:  map[string]string{"fullsend-ai-coder": "Iv1.public123"},
+	}
+	prompter := &fakePrompter{confirmErr: fmt.Errorf("stdin closed")}
+	browser := newFakeBrowser()
+	printer := ui.New(&discardWriter{})
+
+	s := NewSetup(client, prompter, browser, printer).
+		WithAppSet("fullsend-ai")
+
+	_, err := s.Run(context.Background(), "myorg", "coder")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "confirming app install")
+	assert.Contains(t, err.Error(), "stdin closed")
+}
+
+func TestSetup_RecoverCreatedApp_ResolvesAppID(t *testing.T) {
+	// recoverCreatedApp returns AppID=0. After ensureInstalled,
+	// findExistingInstallation should resolve the AppID.
+	client := &forge.FakeClient{
+		Installations: []forge.Installation{},
+		AppClientIDs:  map[string]string{"fullsend-coder": "Iv1.coder456"},
+	}
+	browser := &installOnOpenBrowser{
+		client: client,
+		inst:   forge.Installation{ID: 1, AppID: 99, AppSlug: "fullsend-coder"},
+		urlCh:  make(chan string, 1),
+	}
+	printer := ui.New(&discardWriter{})
+
+	s := NewSetup(client, &fakePrompter{}, browser, printer).
+		WithAppSet("fullsend").
+		WithSecretExists(func(_ string) (bool, error) { return true, nil })
+
+	creds, err := s.Run(context.Background(), "myorg", "coder")
+	require.NoError(t, err)
+	assert.Equal(t, 99, creds.AppID, "AppID should be resolved from installation")
+	assert.Equal(t, "fullsend-coder", creds.Slug)
+	assert.Equal(t, "Iv1.coder456", creds.ClientID)
 }
 
 func TestSetup_NoExistingApp(t *testing.T) {
