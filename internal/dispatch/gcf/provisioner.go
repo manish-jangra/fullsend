@@ -1020,6 +1020,11 @@ const fullsendRepoSuffix = "/.fullsend"
 // parseConditionOrgs extracts GitHub org names from a WIF attribute condition.
 // Supports both the current org-scoped ("assertion.repository_owner == 'org'")
 // and legacy repo-scoped ("assertion.repository == 'org/.fullsend'") formats.
+//
+// The parser splits on single quotes and filters with githubOrgPattern, so it
+// assumes conditions contain only org names as quoted values. If conditions are
+// ever extended with additional CEL clauses containing non-org quoted values,
+// this parser must be updated to avoid false-positive extraction.
 func parseConditionOrgs(condition string) []string {
 	var orgs []string
 	for _, part := range strings.Split(condition, "'") {
@@ -1044,6 +1049,14 @@ type wifMergeResult struct {
 	allOrgs       []string
 }
 
+// ensureWIFPoolAndProvider creates or updates the WIF pool and provider,
+// merging the installing orgs with any existing orgs in the provider's
+// attribute condition.
+//
+// WARNING: read-modify-write without locking — concurrent installs
+// targeting the same WIF provider can race, causing one update to
+// overwrite the other. Run installs sequentially when sharing a WIF
+// provider, or accept that a lost update will be corrected on the next run.
 func (p *Provisioner) ensureWIFPoolAndProvider(ctx context.Context, installingOrgs []string) (*wifMergeResult, error) {
 	projectNumber, err := p.gcpAPI.GetProjectNumber(ctx, p.cfg.ProjectID)
 	if err != nil {
@@ -1058,8 +1071,13 @@ func (p *Provisioner) ensureWIFPoolAndProvider(ctx context.Context, installingOr
 	copy(allOrgs, installingOrgs)
 	existingProvider, getErr := p.gcpAPI.GetWIFProvider(ctx, projectNumber, p.cfg.WIFPoolName, p.cfg.WIFProvider)
 	if getErr != nil {
-		log.Printf("warning: could not read existing WIF provider for merge (proceeding with installing orgs only): %v", getErr)
-	} else if existingProvider != nil {
+		// A non-nil error means "unknown state" — proceeding would risk
+		// overwriting existing orgs (the exact clobber this helper prevents).
+		// Note: GetWIFProvider returns (nil, nil) for 404 (provider does not
+		// exist yet), so a non-nil error is always a real failure.
+		return nil, fmt.Errorf("reading existing WIF provider for merge: %w", getErr)
+	}
+	if existingProvider != nil {
 		existingOrgs := parseConditionOrgs(existingProvider.AttributeCondition)
 		merged := make(map[string]bool)
 		for _, org := range allOrgs {
@@ -1167,6 +1185,15 @@ func (p *Provisioner) ProvisionWIF(ctx context.Context) (wifProvider string, err
 	var projectNumber string
 	if p.cfg.Repo != "" {
 		// Repo-scoped: dedicated provider per repo, no org merge.
+		// Each repo gets a unique provider ID (via BuildRepoProviderID),
+		// so no risk of clobbering another repo's WIF condition.
+		parts := strings.SplitN(p.cfg.Repo, "/", 2)
+		if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+			return "", fmt.Errorf("repo must be in owner/repo format, got %q", p.cfg.Repo)
+		}
+		if strings.ContainsAny(p.cfg.Repo, `'"`) {
+			return "", fmt.Errorf("invalid repo name %q: contains quotes", p.cfg.Repo)
+		}
 		var err error
 		projectNumber, err = p.gcpAPI.GetProjectNumber(ctx, p.cfg.ProjectID)
 		if err != nil {
@@ -1174,13 +1201,6 @@ func (p *Provisioner) ProvisionWIF(ctx context.Context) (wifProvider string, err
 		}
 		if err := p.gcpAPI.CreateWIFPool(ctx, projectNumber, p.cfg.WIFPoolName, "Fullsend GitHub OIDC Pool"); err != nil {
 			return "", fmt.Errorf("creating WIF pool: %w", err)
-		}
-		parts := strings.SplitN(p.cfg.Repo, "/", 2)
-		if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
-			return "", fmt.Errorf("repo must be in owner/repo format, got %q", p.cfg.Repo)
-		}
-		if strings.ContainsAny(p.cfg.Repo, `'"`) {
-			return "", fmt.Errorf("invalid repo name %q: contains quotes", p.cfg.Repo)
 		}
 		p.cfg.WIFProvider = BuildRepoProviderID(parts[0], parts[1])
 		attrCondition := fmt.Sprintf("assertion.repository == '%s'", p.cfg.Repo)

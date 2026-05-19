@@ -1829,6 +1829,31 @@ func TestProvisionWIF_OrgScoped_Unchanged(t *testing.T) {
 	assert.Contains(t, fake.projectIAMBindings[0].Member, "attribute.repository/acme/.fullsend")
 }
 
+func TestProvisionWIF_RepoScoped_RejectsInvalidRepo(t *testing.T) {
+	tests := []struct {
+		name, repo, errContains string
+	}{
+		{"no slash", "just-a-name", "owner/repo format"},
+		{"empty owner", "/repo", "owner/repo format"},
+		{"empty repo", "owner/", "owner/repo format"},
+		{"quotes in repo", "owner's/repo", "contains quotes"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fake := newFakeGCFClient()
+			p := NewProvisioner(Config{
+				ProjectID:  "my-project",
+				GitHubOrgs: []string{"acme"},
+				Repo:       tt.repo,
+			}, fake)
+			_, err := p.ProvisionWIF(context.Background())
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tt.errContains)
+			assert.NotContains(t, fake.calls, "GetProjectNumber")
+		})
+	}
+}
+
 func TestProvisionWIF_OrgScoped_MergesExistingOrgs(t *testing.T) {
 	fake := newFakeGCFClient()
 	fake.wifProvider = &WIFProviderInfo{
@@ -1851,7 +1876,7 @@ func TestProvisionWIF_OrgScoped_MergesExistingOrgs(t *testing.T) {
 	assert.Contains(t, fake.projectIAMBindings[0].Member, "attribute.repository/acme/.fullsend")
 }
 
-func TestProvisionWIF_OrgScoped_GetProviderError_StillProceeds(t *testing.T) {
+func TestProvisionWIF_OrgScoped_GetProviderError_FailsToPreventClobber(t *testing.T) {
 	fake := newFakeGCFClient()
 	fake.errs["GetWIFProvider"] = fmt.Errorf("transient error")
 	p := NewProvisioner(Config{
@@ -1860,10 +1885,8 @@ func TestProvisionWIF_OrgScoped_GetProviderError_StillProceeds(t *testing.T) {
 	}, fake)
 
 	_, err := p.ProvisionWIF(context.Background())
-	require.NoError(t, err)
-
-	assert.Equal(t, "assertion.repository_owner == 'acme'",
-		fake.lastWIFProviderConfig.AttributeCondition)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "reading existing WIF provider for merge")
 }
 
 func TestParseConditionOrgs(t *testing.T) {
