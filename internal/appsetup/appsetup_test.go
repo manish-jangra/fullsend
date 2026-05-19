@@ -3,6 +3,7 @@ package appsetup
 import (
 	"context"
 	"crypto/ecdsa"
+	"fmt"
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/rsa"
@@ -400,6 +401,27 @@ func TestSetup_PublicApp_NotInstalledYet_FallsThroughToCreateWhenNotFound(t *tes
 	default:
 		t.Error("manifest flow should have opened browser")
 	}
+}
+
+func TestSetup_PublicApp_TransientErrorPropagated(t *testing.T) {
+	// publicApps=true and GetAppClientID returns a transient error (not ErrNotFound).
+	// Expected: error is propagated, NOT treated as "app doesn't exist".
+	client := &forge.FakeClient{
+		Installations: []forge.Installation{},
+		Errors:        map[string]error{"GetAppClientID": fmt.Errorf("rate limit exceeded")},
+	}
+	prompter := &fakePrompter{}
+	browser := newFakeBrowser()
+	printer := ui.New(&discardWriter{})
+
+	s := NewSetup(client, prompter, browser, printer).
+		WithAppSet("fullsend-ai").
+		WithPublicApps(true)
+
+	_, err := s.Run(context.Background(), "myorg", "coder")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "checking public app")
+	assert.Contains(t, err.Error(), "rate limit exceeded")
 }
 
 func TestSetup_NoExistingApp(t *testing.T) {

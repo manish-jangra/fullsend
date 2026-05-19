@@ -248,22 +248,24 @@ func (s *Setup) Run(ctx context.Context, org, role string) (*AppCredentials, err
 	// We do not attempt PEM recovery here; the PEM is owned by the source org
 	// and is copied separately by copySharedAppPEMs.
 	if s.publicApps {
-		if clientID, lookupErr := s.client.GetAppClientID(ctx, slug); lookupErr == nil {
-			s.ui.StepDone(fmt.Sprintf("Found existing public app: %s", slug))
+		clientID, lookupErr := s.client.GetAppClientID(ctx, slug)
+		if lookupErr != nil && !forge.IsNotFound(lookupErr) {
+			return nil, fmt.Errorf("checking public app %s: %w", slug, lookupErr)
+		}
+		if lookupErr == nil {
 			if err := s.ensureInstalled(ctx, org, slug); err != nil {
-				return nil, fmt.Errorf("ensuring installation of public app: %w", err)
+				return nil, fmt.Errorf("ensuring installation of public app %s: %w", slug, err)
 			}
-			// Fetch the live installation for the AppID.
 			inst, found, err := s.findExistingInstallation(ctx, org, role, slug)
 			if err != nil {
 				return nil, fmt.Errorf("looking up installed public app: %w", err)
 			}
-			appID := 0
-			if found {
-				appID = inst.AppID
+			if !found {
+				return nil, fmt.Errorf("public app %s was installed but not found in installations list", slug)
 			}
-			s.ui.StepDone(fmt.Sprintf("Reusing public app %s", slug))
-			return &AppCredentials{AppID: appID, Slug: slug, Name: slug, ClientID: clientID}, nil
+			s.checkPermissions(inst, org, role)
+			s.ui.StepDone(fmt.Sprintf("Reusing public app %s (ID: %d)", slug, inst.AppID))
+			return &AppCredentials{AppID: inst.AppID, Slug: slug, Name: slug, ClientID: clientID}, nil
 		}
 	}
 
