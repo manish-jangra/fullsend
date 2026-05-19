@@ -74,7 +74,7 @@ func DefaultAgentRoles() []string {
 // The "fullsend" dispatch role is excluded because per-repo mode uses
 // the target repo's shim workflow for dispatch instead of a separate app.
 func PerRepoDefaultRoles() []string {
-	return []string{"triage", "coder", "review", "retro", "prioritize"}
+	return []string{"triage", "coder", "review", "fix", "retro", "prioritize"}
 }
 
 // NewOrgConfig creates a new OrgConfig with sensible defaults.
