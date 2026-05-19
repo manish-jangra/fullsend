@@ -25,12 +25,42 @@ const (
 )
 
 func sanitizeDownload(localDir string) error {
-	return filepath.WalkDir(localDir, func(path string, d fs.DirEntry, err error) error {
+	absLocal, err := filepath.Abs(localDir)
+	if err != nil {
+		return err
+	}
+	absLocal, err = filepath.EvalSymlinks(absLocal)
+	if err != nil {
+		return err
+	}
+
+	return filepath.WalkDir(absLocal, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
 		if d.Type()&fs.ModeSymlink != 0 {
-			return os.Remove(path)
+			target, readErr := os.Readlink(path)
+			if readErr != nil {
+				return os.Remove(path)
+			}
+			// Absolute targets always point outside the repo root.
+			if filepath.IsAbs(target) {
+				return os.Remove(path)
+			}
+			// Use EvalSymlinks, not filepath.Clean: Clean is textual and misses
+			// chains where an in-repo dir-symlink is used as a component
+			// (e.g. "sub/link/../../etc/passwd" cleans to inside the repo but
+			// follows the link to outside). Fall back to remove on error
+			// (dangling or looping).
+			rawPath := filepath.Dir(path) + string(filepath.Separator) + target
+			resolved, evalErr := filepath.EvalSymlinks(rawPath)
+			if evalErr != nil {
+				return os.Remove(path)
+			}
+			if !strings.HasPrefix(resolved+string(filepath.Separator), absLocal+string(filepath.Separator)) {
+				return os.Remove(path)
+			}
+			return nil
 		}
 
 		if d.IsDir() && d.Name() == "hooks" && filepath.Base(filepath.Dir(path)) == ".git" {
@@ -343,7 +373,7 @@ func DownloadFile(sandboxName, remotePath, localPath string) error {
 }
 
 // SafeDownload copies a directory from a sandbox to the local machine and then
-// sanitizes the result by removing symlinks and .git/hooks/.
+// sanitizes the result by removing dangerous symlinks (absolute or repo-escaping) and .git/hooks/.
 func SafeDownload(sandboxName, remoteDir, localDir string) error {
 	if err := Download(sandboxName, remoteDir, localDir); err != nil {
 		return err

@@ -271,7 +271,7 @@ Per-repo mode does not use the layer stack — it runs the same phases inline in
 │             ▼                                                   │
 │  ┌──────────────────┐                                           │
 │  │ Extract output    │ SafeDownload() with sanitization:        │
-│  │                   │ - Remove symlinks (sandbox escape)       │
+│  │                   │ - Remove dangerous symlinks (sandbox escape) │
 │  │                   │ - Remove .git/hooks/ (hook injection)    │
 │  └──────┬───────────┘                                           │
 │         ▼                                                       │
@@ -316,7 +316,7 @@ SandboxClaudeConfig = "/tmp/claude-config"
 | `ExecStreamReader()` | `openshell sandbox exec ...` | Streaming stdout reader |
 | `Upload()` | `openshell sandbox upload ...` | Copy files into sandbox |
 | `Download()` | `openshell sandbox download ...` | Copy files out of sandbox |
-| `SafeDownload()` | Download + sanitize | Remove symlinks, .git/hooks |
+| `SafeDownload()` | Download + sanitize | Remove dangerous symlinks (absolute or repo-escaping), .git/hooks |
 | `CollectLogs()` | Download logs dir | Extract sandbox logs |
 | `ExtractTranscripts()` | Download transcripts | Extract conversation transcripts |
 | `Delete()` | `openshell sandbox delete` | Destroy container |
@@ -324,7 +324,7 @@ SandboxClaudeConfig = "/tmp/claude-config"
 ### Security: sanitizeDownload()
 
 After downloading files from the sandbox, `sanitizeDownload()` removes:
-- **Symlinks** — Prevents sandbox escape via symlink-to-host-path attacks
+- **Dangerous symlinks** (absolute targets or targets that escape the repo) — Prevents sandbox escape via symlink-to-host-path attacks; relative in-repo symlinks are kept
 - **.git/hooks/** — Prevents hook injection that would execute on the host
 
 ---
