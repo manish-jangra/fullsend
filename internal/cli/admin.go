@@ -1311,13 +1311,13 @@ func runAppSetup(ctx context.Context, client forge.Client, printer *ui.Printer, 
 		WithStoredAppIDs(storedAppIDs)
 
 	// Merge known slugs: config-based first, then shared app overrides.
-	// Filter config slugs to the requested app-set so that an existing
-	// install of app-set A doesn't shadow a new install of app-set B.
+	// Filter both config slugs and shared slugs to the requested app-set
+	// so that an existing install of app-set A doesn't shadow a new install
+	// of app-set B. Without this, nonflux-triage (app-set "nonflux") would
+	// prevent fullsend-ai-triage (app-set "fullsend-ai") from being detected
+	// and installed.
 	knownSlugs := filterSlugsByAppSet(loadKnownSlugs(ctx, client, org), appSet)
-	// Shared slugs are exempt from the prefix filter because they represent
-	// cross-org shared apps whose slug is authoritative regardless of the
-	// requested app-set prefix.
-	for role, slug := range sharedSlugs {
+	for role, slug := range filterSlugsByAppSet(sharedSlugs, appSet) {
 		knownSlugs[role] = slug
 	}
 	if len(knownSlugs) > 0 {

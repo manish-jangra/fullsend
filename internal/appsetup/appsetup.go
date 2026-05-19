@@ -239,34 +239,49 @@ func (s *Setup) Run(ctx context.Context, org, role string) (*AppCredentials, err
 		if err := s.ensureInstalled(ctx, org, recovered.Slug); err != nil {
 			return nil, fmt.Errorf("ensuring installation: %w", err)
 		}
+		// Resolve AppID from the installation so ROLE_APP_IDS gets updated.
+		if recovered.AppID == 0 {
+			inst, found, err := s.findExistingInstallation(ctx, org, role, recovered.Slug)
+			if err == nil && found {
+				recovered.AppID = inst.AppID
+			}
+		}
 		return recovered, nil
 	}
 
-	// For public app-sets, check if the app already exists globally before
-	// creating a new one. Public apps (e.g. fullsend-ai-fullsend) are owned
-	// by another org and just need to be installed — not re-created.
-	// We do not attempt PEM recovery here; the PEM is owned by the source org
-	// and is copied separately by copySharedAppPEMs.
-	if s.publicApps {
-		clientID, lookupErr := s.client.GetAppClientID(ctx, slug)
-		if lookupErr != nil && !forge.IsNotFound(lookupErr) {
-			return nil, fmt.Errorf("checking public app %s: %w", slug, lookupErr)
+	// Check if the app already exists globally before creating a new one.
+	// Public apps (e.g. fullsend-ai-triage) are owned by another org and
+	// just need to be installed — not re-created via the manifest flow.
+	// When --public was passed, install without prompting. Otherwise, ask
+	// the user to confirm so they don't accidentally create a duplicate.
+	clientID, lookupErr := s.client.GetAppClientID(ctx, slug)
+	if lookupErr != nil && !forge.IsNotFound(lookupErr) {
+		return nil, fmt.Errorf("checking existing app %s: %w", slug, lookupErr)
+	}
+	if lookupErr == nil {
+		if !s.publicApps {
+			s.ui.StepDone(fmt.Sprintf("Found existing public app: %s", slug))
+			install, confirmErr := s.prompter.Confirm(fmt.Sprintf("Public app %s already exists — install it into %s?", slug, org))
+			if confirmErr != nil {
+				return nil, fmt.Errorf("confirming public app install: %w", confirmErr)
+			}
+			if !install {
+				return nil, fmt.Errorf("app %s already exists as a public app; use --public to install it, or choose a different --app-set", slug)
+			}
 		}
-		if lookupErr == nil {
-			if err := s.ensureInstalled(ctx, org, slug); err != nil {
-				return nil, fmt.Errorf("ensuring installation of public app %s: %w", slug, err)
-			}
-			inst, found, err := s.findExistingInstallation(ctx, org, role, slug)
-			if err != nil {
-				return nil, fmt.Errorf("looking up installed public app: %w", err)
-			}
-			if !found {
-				return nil, fmt.Errorf("public app %s was installed but not found in installations list", slug)
-			}
-			s.checkPermissions(inst, org, role)
-			s.ui.StepDone(fmt.Sprintf("Reusing public app %s (ID: %d)", slug, inst.AppID))
-			return &AppCredentials{AppID: inst.AppID, Slug: slug, Name: slug, ClientID: clientID}, nil
+		if err := s.ensureInstalled(ctx, org, slug); err != nil {
+			return nil, fmt.Errorf("ensuring installation of public app %s: %w", slug, err)
 		}
+		inst, found, err := s.findExistingInstallation(ctx, org, role, slug)
+		if err != nil {
+			return nil, fmt.Errorf("looking up installed public app: %w", err)
+		}
+		if !found {
+			return nil, fmt.Errorf("public app %s was installed but not found in installations list", slug)
+		}
+		s.checkPermissions(inst, org, role)
+		s.ui.StepDone(fmt.Sprintf("Reusing public app %s (ID: %d)", slug, inst.AppID))
+		return &AppCredentials{AppID: inst.AppID, Slug: slug, Name: slug, ClientID: clientID}, nil
 	}
 
 	// No existing app found — run the manifest flow.

@@ -420,8 +420,58 @@ func TestSetup_PublicApp_TransientErrorPropagated(t *testing.T) {
 
 	_, err := s.Run(context.Background(), "myorg", "coder")
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "checking public app")
+	assert.Contains(t, err.Error(), "checking existing app")
 	assert.Contains(t, err.Error(), "rate limit exceeded")
+}
+
+func TestSetup_PublicAppFound_WithoutFlag_UserConfirms(t *testing.T) {
+	// --public NOT set, but app exists globally. User confirms → installs it.
+	client := &forge.FakeClient{
+		Installations: []forge.Installation{},
+		AppClientIDs:  map[string]string{"fullsend-ai-coder": "Iv1.public123"},
+	}
+	prompter := &fakePrompter{confirmResult: true}
+	browser := &installOnOpenBrowser{
+		client: client,
+		inst:   forge.Installation{ID: 1, AppID: 42, AppSlug: "fullsend-ai-coder"},
+		urlCh:  make(chan string, 1),
+	}
+	printer := ui.New(&discardWriter{})
+
+	s := NewSetup(client, prompter, browser, printer).
+		WithAppSet("fullsend-ai")
+	// Note: WithPublicApps NOT called (defaults to false).
+
+	creds, err := s.Run(context.Background(), "myorg", "coder")
+	require.NoError(t, err)
+
+	assert.True(t, prompter.confirmCalled, "user should be prompted")
+	assert.Equal(t, "fullsend-ai-coder", creds.Slug)
+	assert.Equal(t, "Iv1.public123", creds.ClientID)
+	assert.Equal(t, 42, creds.AppID)
+	assert.Empty(t, creds.PEM)
+}
+
+func TestSetup_PublicAppFound_WithoutFlag_UserDeclines(t *testing.T) {
+	// --public NOT set, app exists globally. User says no → helpful error.
+	client := &forge.FakeClient{
+		Installations: []forge.Installation{},
+		AppClientIDs:  map[string]string{"fullsend-ai-coder": "Iv1.public123"},
+	}
+	prompter := &fakePrompter{confirmResult: false}
+	browser := newFakeBrowser()
+	printer := ui.New(&discardWriter{})
+
+	s := NewSetup(client, prompter, browser, printer).
+		WithAppSet("fullsend-ai")
+
+	_, err := s.Run(context.Background(), "myorg", "coder")
+	require.Error(t, err)
+
+	assert.True(t, prompter.confirmCalled, "user should be prompted")
+	assert.Contains(t, err.Error(), "already exists as a public app")
+	assert.Contains(t, err.Error(), "--public")
+	assert.Contains(t, err.Error(), "--app-set")
 }
 
 func TestSetup_NoExistingApp(t *testing.T) {
