@@ -160,8 +160,9 @@ func newScanOutputCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "output",
 		Short: "Scan agent output for leaked secrets before posting",
-		Long: `Reads text from stdin and scans for API keys, tokens, credentials,
-and sensitive patterns. Outputs the redacted version to stdout.
+		Long: `Reads text from stdin, normalizes invisible Unicode characters, and
+scans for API keys, tokens, credentials, and sensitive patterns. Outputs the
+sanitized version to stdout.
 
 Usage in a workflow step:
   echo "$AGENT_OUTPUT" | fullsend scan output > safe_output.txt`,

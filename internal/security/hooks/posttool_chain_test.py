@@ -16,12 +16,12 @@ SECRET_HOOK = str(HOOKS_DIR / "secret_redact_posttool.py")
 PLAIN_PAT = "ghp_FAKEtesttoken000000000000000000000000"
 
 
-def obfuscate_with_zwnj(text: str) -> str:
-    """Insert zero-width non-joiner (U+200C) between each character."""
-    return "\u200c".join(text)
+def obfuscate_with_char(text: str, char: str) -> str:
+    """Insert invisible character between each codepoint."""
+    return char.join(text)
 
 
-def run_hook(script: str, tool_result: str) -> tuple[int, str]:
+def run_hook(script: str, tool_result: str) -> tuple[int, str, str]:
     proc = subprocess.run(
         [sys.executable, script],
         input=json.dumps({"tool_name": "Read", "tool_result": tool_result}),
@@ -29,21 +29,21 @@ def run_hook(script: str, tool_result: str) -> tuple[int, str]:
         text=True,
         timeout=10,
     )
-    return proc.returncode, proc.stdout
+    return proc.returncode, proc.stdout, proc.stderr
 
 
 def run_chain(tool_result: str) -> str:
     """Run unicode_posttool then secret_redact_posttool (correct sandbox order)."""
-    rc, stdout = run_hook(UNICODE_HOOK, tool_result)
+    rc, stdout, stderr = run_hook(UNICODE_HOOK, tool_result)
     if rc != 0:
-        raise RuntimeError(f"unicode hook failed: rc={rc}")
+        raise RuntimeError(f"unicode hook failed: rc={rc}, stderr={stderr}")
     if stdout.strip():
         out = json.loads(stdout)
         tool_result = out["tool_result"]
 
-    rc, stdout = run_hook(SECRET_HOOK, tool_result)
+    rc, stdout, stderr = run_hook(SECRET_HOOK, tool_result)
     if rc != 0:
-        raise RuntimeError(f"secret_redact hook failed: rc={rc}")
+        raise RuntimeError(f"secret_redact hook failed: rc={rc}, stderr={stderr}")
     if stdout.strip():
         out = json.loads(stdout)
         return out["tool_result"]
@@ -57,14 +57,20 @@ class TestPostToolChain(unittest.TestCase):
         self.assertIn("...", result)
 
     def test_zero_width_obfuscated_pat_redacted_by_chain(self):
-        obfuscated = obfuscate_with_zwnj(PLAIN_PAT)
+        obfuscated = obfuscate_with_char(PLAIN_PAT, "\u200c")
+        result = run_chain(obfuscated)
+        self.assertNotIn("ghp_FAKEtest", result)
+        self.assertIn("...", result)
+
+    def test_ltr_mark_obfuscated_pat_redacted_by_chain(self):
+        obfuscated = obfuscate_with_char(PLAIN_PAT, "\u200e")
         result = run_chain(obfuscated)
         self.assertNotIn("ghp_FAKEtest", result)
         self.assertIn("...", result)
 
     def test_redact_alone_misses_zero_width_obfuscated_pat(self):
-        obfuscated = obfuscate_with_zwnj(PLAIN_PAT)
-        rc, stdout = run_hook(SECRET_HOOK, obfuscated)
+        obfuscated = obfuscate_with_char(PLAIN_PAT, "\u200c")
+        rc, stdout, _ = run_hook(SECRET_HOOK, obfuscated)
         self.assertEqual(rc, 0)
         # secret_redact alone does not modify output when regex cannot match
         self.assertEqual(stdout.strip(), "")

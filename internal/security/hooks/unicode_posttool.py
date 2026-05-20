@@ -39,7 +39,9 @@ _CHECKS: list[tuple[str, str, re.Pattern]] = [
     (
         "zero_width",
         "high",
-        re.compile("[\u200b-\u200d\ufeff\u00ad\u2060-\u2064]+"),
+        re.compile(
+            "[\u00ad\u034f\u180e\u200b-\u200f\ufeff\u2060-\u2064\u206a-\u206f\ufff9-\ufffb]+"
+        ),
     ),
     (
         "bidi_override",
@@ -128,6 +130,20 @@ def scan_text(text: str) -> tuple[str, list[dict]]:
         )
 
         result = pattern.sub("", result)
+
+    # Supplementary variation selectors (VS17-VS256, U+E0100-U+E01EF).
+    supp_vs = [c for c in result if 0xE0100 <= ord(c) <= 0xE01EF]
+    if supp_vs:
+        findings.append(
+            {
+                "name": "variation_selector",
+                "severity": "medium",
+                "detail": (
+                    f"{len(supp_vs)} supplementary variation selector character(s) removed"
+                ),
+            }
+        )
+        result = "".join(c for c in result if not (0xE0100 <= ord(c) <= 0xE01EF))
 
     # NFKC normalization (fullwidth -> ASCII, compatibility decomposition).
     nfkc = unicodedata.normalize("NFKC", result)

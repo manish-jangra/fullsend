@@ -312,6 +312,21 @@ func TestPipeline(t *testing.T) {
 		assert.NotContains(t, r.Sanitized, "ghp_FAKEtest")
 	})
 
+	t.Run("normalize then redact catches LTR mark obfuscated PAT", func(t *testing.T) {
+		p := NewPipeline(NewUnicodeNormalizer(), NewSecretRedactor())
+		plain := "ghp_FAKEtesttoken000000000000000000000000"
+		var obfuscated strings.Builder
+		for _, r := range plain {
+			obfuscated.WriteRune(r)
+			obfuscated.WriteRune('\u200e')
+		}
+		r := p.Scan(obfuscated.String())
+		assert.False(t, r.Safe)
+		assert.True(t, hasFinding(r, "zero_width"))
+		assert.True(t, hasFinding(r, "github_pat"))
+		assert.NotContains(t, r.Sanitized, "ghp_FAKEtest")
+	})
+
 	t.Run("clean text passes both", func(t *testing.T) {
 		p := InputPipeline()
 		r := p.Scan("Normal commit message fixing a null pointer bug.")
