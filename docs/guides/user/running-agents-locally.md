@@ -88,13 +88,14 @@ Each agent requires additional variables via its harness `runner_env`. Add the o
 | Variable | Agent(s) | Description |
 |----------|----------|-------------|
 | `GITHUB_ISSUE_URL` | triage | Full URL of the GitHub issue to triage |
-| `REPO_FULL_NAME` | triage, code, review, fix | `owner/repo` of the target repository |
+| `REPO_FULL_NAME` | code, review, fix | `owner/repo` of the target repository |
 | `ISSUE_NUMBER` | code | Issue number the code agent should implement |
 | `TARGET_BRANCH` | code, fix | Branch to base work on (e.g. `main`) |
 | `PUSH_TOKEN` | code, fix | GitHub token with push access for the post-script |
 | `PR_NUMBER` | review, fix | Pull request number to review or fix |
 | `GITHUB_PR_URL` | review | Full URL of the pull request to review |
 | `REVIEW_TOKEN` | review | GitHub token for posting review comments |
+| `REVIEW_BODY_FILE` | fix | Path to a file containing the review body to fix |
 
 See the harness definitions in `harness/*.yaml` within your `.fullsend` config directory for the complete list per agent.
 
@@ -113,8 +114,14 @@ The default `:latest` tag is amd64-only. The `:dev` tag is a multi-arch image th
 The fullsend CLI requires a running OpenShell gateway — it will not start one automatically. Start the gateway with the Podman driver:
 
 ```bash
+export OPENSHELL_SSH_HANDSHAKE_SECRET="local-$(openssl rand -hex 16)"
+
+# v0.0.38 requires an explicit supervisor image (version-tagged images start at 0.0.41)
+export OPENSHELL_SUPERVISOR_IMAGE="ghcr.io/nvidia/openshell/supervisor:dfd47683e7da4f1a4a8fa5d77f92d3696e6a41f9"
+
 openshell-gateway \
   --bind-address 127.0.0.1 \
+  --health-port 8081 \
   --drivers podman \
   --disable-tls \
   --db-url "sqlite:/tmp/gateway.db?mode=rwc" &
@@ -123,9 +130,9 @@ openshell-gateway \
 Wait for the health check to pass, then register the gateway:
 
 ```bash
-# Wait for gateway to start
+# Health endpoint is on port 8081, API on port 8080
 for i in $(seq 1 15); do
-  curl -sf http://127.0.0.1:8080/healthz >/dev/null 2>&1 && break
+  curl -sf http://127.0.0.1:8081/healthz >/dev/null 2>&1 && break
   sleep 2
 done
 
@@ -233,6 +240,11 @@ When using a released binary (this guide's workflow), **strategy 2 applies autom
 - Check that `podman machine start` has been run (macOS only)
 - Verify OpenShell is installed: `openshell --version`
 - Verify the gateway is running: `openshell gateway list`
+
+**`Gateway not running` or `no openshell gateway running`**
+- Start the gateway as described in step 5
+- Verify it's healthy: `curl -sf http://127.0.0.1:8081/healthz`
+- Check that it's registered: `openshell gateway list`
 
 **`Syntax error: "(" unexpected` inside sandbox**
 - The macOS Mach-O binary was injected instead of a Linux ELF. Update to fullsend 0.4.0+ which auto-resolves the correct binary, or provide one explicitly with `--fullsend-binary`
