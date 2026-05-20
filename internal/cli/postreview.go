@@ -2,8 +2,6 @@ package cli
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -19,22 +17,18 @@ import (
 )
 
 const reviewMarker = "<!-- fullsend:review-agent -->"
-const reviewFollowupSummaryMarker = "<!-- fullsend:review-follow-ups -->"
-const reviewFollowupIssueMarkerPrefix = "<!-- fullsend:review-follow-up:"
-const maxReviewFollowUpIssues = 3
 
 var hexSHARe = regexp.MustCompile(`^[0-9a-fA-F]{40}$|^[0-9a-fA-F]{64}$`)
 var reasonRe = regexp.MustCompile(`^[a-zA-Z0-9_-]*$`)
 
 func newPostReviewCmd() *cobra.Command {
 	var (
-		repo              string
-		pr                int
-		result            string
-		token             string
-		headSHA           string
-		dryRun            bool
-		maxFollowUpIssues int
+		repo    string
+		pr      int
+		result  string
+		token   string
+		headSHA string
+		dryRun  bool
 	)
 
 	cmd := &cobra.Command{
@@ -69,10 +63,6 @@ has moved, a stale-head failure is posted instead.`,
 			if pr <= 0 {
 				return fmt.Errorf("--pr must be a positive integer, got %d", pr)
 			}
-			if err := validateMaxReviewFollowUpIssues(maxFollowUpIssues, "--max-follow-up-issues"); err != nil {
-				return err
-			}
-
 			parts := strings.SplitN(repo, "/", 2)
 			if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
 				return fmt.Errorf("--repo must be in owner/repo format, got %q", repo)
@@ -132,7 +122,7 @@ has moved, a stale-head failure is posted instead.`,
 				return err
 			}
 
-			return postApprovedFollowUpIssues(cmd.Context(), client, owner, repoName, pr, parsed, dryRun, maxFollowUpIssues, printer)
+			return postApprovedFollowUpIssues(cmd.Context(), owner, repoName, pr, parsed, printer)
 		},
 	}
 
@@ -142,7 +132,6 @@ has moved, a stale-head failure is posted instead.`,
 	cmd.Flags().StringVar(&token, "token", "", "GitHub token (default: $GITHUB_TOKEN)")
 	cmd.Flags().StringVar(&headSHA, "head-sha", "", "expected PR HEAD SHA (skips review if HEAD has moved)")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "print what would be posted without making API calls")
-	cmd.Flags().IntVar(&maxFollowUpIssues, "max-follow-up-issues", maxReviewFollowUpIssues, "maximum number of review follow-up issues to create after an approval (0 disables creation; max 3)")
 	_ = cmd.MarkFlagRequired("repo")
 	_ = cmd.MarkFlagRequired("pr")
 
@@ -378,152 +367,14 @@ func formatFindingComment(f ReviewFinding) string {
 	return b.String()
 }
 
-type reviewFollowupIssue struct {
-	finding ReviewFinding
-	issue   *forge.Issue
-	created bool
-}
-
 // postApprovedFollowUpIssues is disabled pending #1137. Follow-up issues
 // should only be created after the PR merges, not while it is still open.
-func postApprovedFollowUpIssues(_ context.Context, _ forge.Client, _, _ string, _ int, parsed ReviewResult, _ bool, _ int, printer *ui.Printer) error {
+func postApprovedFollowUpIssues(_ context.Context, _, _ string, _ int, parsed ReviewResult, printer *ui.Printer) error {
 	if strings.ToLower(parsed.Action) != "approve" {
 		return nil
 	}
 	printer.StepInfo("Review follow-up issue creation is temporarily disabled (#1137)")
 	return nil
-}
-
-func validateMaxReviewFollowUpIssues(value int, name string) error {
-	if value < 0 || value > maxReviewFollowUpIssues {
-		return fmt.Errorf("%s must be between 0 and %d, got %d", name, maxReviewFollowUpIssues, value)
-	}
-	return nil
-}
-
-func actionableApprovedFindings(findings []ReviewFinding) []ReviewFinding {
-	actionable := make([]ReviewFinding, 0, len(findings))
-	for _, finding := range findings {
-		severity := strings.ToLower(finding.Severity)
-		if finding.Actionable && (severity == "low" || severity == "info") {
-			actionable = append(actionable, finding)
-		}
-	}
-	return actionable
-}
-
-func postReviewFollowupSummary(ctx context.Context, client forge.Client, owner, repo string, pr int, results []reviewFollowupIssue, skippedCount, maxFollowUpIssues int, printer *ui.Printer) error {
-	if len(results) == 0 && skippedCount == 0 {
-		return nil
-	}
-
-	var created []reviewFollowupIssue
-	var existing []reviewFollowupIssue
-	for _, result := range results {
-		if result.created {
-			created = append(created, result)
-		} else {
-			existing = append(existing, result)
-		}
-	}
-
-	var b strings.Builder
-	b.WriteString("## Review follow-ups\n\n")
-	if skippedCount > 0 {
-		if maxFollowUpIssues == 0 {
-			fmt.Fprintf(&b, "**Warning:** follow-up issue creation is disabled, so %d actionable non-blocking finding(s) were not filed.\n\n", skippedCount)
-		} else {
-			fmt.Fprintf(&b, "**Warning:** follow-up issue creation is capped at %d per review run; %d actionable non-blocking finding(s) were not filed.\n\n", maxFollowUpIssues, skippedCount)
-		}
-	}
-	if len(created) > 0 {
-		b.WriteString("Created follow-up issues for actionable non-blocking review findings:\n\n")
-		for _, result := range created {
-			fmt.Fprintf(&b, "- [#%d](%s) — %s\n", result.issue.Number, result.issue.URL, reviewFindingSummary(result.finding))
-		}
-	}
-	if len(existing) > 0 {
-		if len(created) > 0 {
-			b.WriteString("\n")
-		}
-		b.WriteString("Existing follow-up issues already track these findings:\n\n")
-		for _, result := range existing {
-			fmt.Fprintf(&b, "- [#%d](%s) — %s\n", result.issue.Number, result.issue.URL, reviewFindingSummary(result.finding))
-		}
-	}
-
-	cfg := sticky.Config{Marker: reviewFollowupSummaryMarker}
-	if _, err := sticky.Post(ctx, client, owner, repo, pr, b.String(), cfg, printer); err != nil {
-		return fmt.Errorf("posting review follow-up summary: %w", err)
-	}
-	return nil
-}
-
-func reviewFollowupIssueTitle(pr int, finding ReviewFinding) string {
-	summary := reviewFindingSummary(finding)
-	if summary == "" {
-		summary = "actionable review finding"
-	}
-	return fmt.Sprintf("Follow-up from PR #%d: %s", pr, truncate(summary, 88))
-}
-
-func reviewFollowupIssueBody(owner, repo string, pr int, finding ReviewFinding, marker string) string {
-	var b strings.Builder
-	b.WriteString(marker)
-	b.WriteString("\n\n")
-	b.WriteString("## Review follow-up\n\n")
-	fmt.Fprintf(&b, "- PR: https://github.com/%s/%s/pull/%d\n", owner, repo, pr)
-	fmt.Fprintf(&b, "- Severity: `%s`\n", finding.Severity)
-	fmt.Fprintf(&b, "- Category: `%s`\n", finding.Category)
-	fmt.Fprintf(&b, "- Location: `%s`\n", reviewFindingLocation(finding))
-	b.WriteString("\n## Finding\n\n")
-	b.WriteString(strings.TrimSpace(finding.Description))
-	if finding.Remediation != "" {
-		b.WriteString("\n\n## Suggested remediation\n\n")
-		b.WriteString(strings.TrimSpace(finding.Remediation))
-	}
-	b.WriteString("\n\n---\n")
-	b.WriteString("_Generated by the fullsend review agent from an approved PR. The PR was approved because this finding was non-blocking, but it was marked actionable so it is tracked separately._\n")
-	return b.String()
-}
-
-func reviewFollowupIssueMarker(owner, repo string, finding ReviewFinding) string {
-	hash := sha256.New()
-	fmt.Fprintf(hash, "%s/%s\n%s\n%s\n%s\n%d\n%s\n", owner, repo, strings.ToLower(finding.Severity), finding.Category, finding.File, finding.Line, compactWhitespace(finding.Description))
-	return reviewFollowupIssueMarkerPrefix + hex.EncodeToString(hash.Sum(nil)) + " -->"
-}
-
-func reviewFindingLocation(finding ReviewFinding) string {
-	if finding.Line > 0 {
-		return fmt.Sprintf("%s:%d", finding.File, finding.Line)
-	}
-	return finding.File
-}
-
-func reviewFindingSummary(finding ReviewFinding) string {
-	summary := compactWhitespace(finding.Description)
-	if summary != "" {
-		return summary
-	}
-	return compactWhitespace(finding.Category)
-}
-
-func compactWhitespace(s string) string {
-	return strings.Join(strings.Fields(s), " ")
-}
-
-func truncate(s string, max int) string {
-	runes := []rune(s)
-	if len(runes) <= max {
-		return s
-	}
-	if max <= 0 {
-		return ""
-	}
-	if max <= 3 {
-		return string(runes[:max])
-	}
-	return strings.TrimSpace(string(runes[:max-3])) + "..."
 }
 
 // dismissStaleRequestChanges dismisses the most recent CHANGES_REQUESTED

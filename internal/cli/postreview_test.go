@@ -6,8 +6,6 @@ import (
 	"fmt"
 	"io"
 	"testing"
-	"unicode/utf8"
-
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -70,39 +68,6 @@ func TestParseReviewResult_Findings(t *testing.T) {
 	require.Len(t, result.Findings, 1)
 	assert.Equal(t, "low", result.Findings[0].Severity)
 	assert.True(t, result.Findings[0].Actionable)
-}
-
-func TestNewPostReviewCmd_MaxFollowUpIssuesDefault(t *testing.T) {
-	cmd := newPostReviewCmd()
-	flag := cmd.Flags().Lookup("max-follow-up-issues")
-	require.NotNil(t, flag)
-	assert.Equal(t, "3", flag.DefValue)
-}
-
-func TestValidateMaxReviewFollowUpIssues(t *testing.T) {
-	tests := []struct {
-		name    string
-		value   int
-		wantErr bool
-	}{
-		{name: "disabled", value: 0},
-		{name: "within cap", value: 2},
-		{name: "at cap", value: 3},
-		{name: "negative", value: -1, wantErr: true},
-		{name: "above cap", value: 4, wantErr: true},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			err := validateMaxReviewFollowUpIssues(tt.value, "--max-follow-up-issues")
-			if tt.wantErr {
-				require.Error(t, err)
-				assert.Contains(t, err.Error(), "between 0 and 3")
-			} else {
-				require.NoError(t, err)
-			}
-		})
-	}
 }
 
 func TestReviewActionToEvent(t *testing.T) {
@@ -832,8 +797,6 @@ func TestFormatFindingComment(t *testing.T) {
 func TestPostApprovedFollowUpIssues_DisabledIsNoop(t *testing.T) {
 	// Issue creation is disabled (#1137). Verify the function is a no-op for
 	// approve actions with actionable findings.
-	fc := forge.NewFakeClient()
-	fc.AuthenticatedUser = "fullsend-review[bot]"
 	printer := ui.New(io.Discard)
 	parsed := ReviewResult{
 		Action: "approve",
@@ -849,106 +812,6 @@ func TestPostApprovedFollowUpIssues_DisabledIsNoop(t *testing.T) {
 		},
 	}
 
-	err := postApprovedFollowUpIssues(context.Background(), fc, "acme", "repo", 9, parsed, false, maxReviewFollowUpIssues, printer)
+	err := postApprovedFollowUpIssues(context.Background(), "acme", "repo", 9, parsed, printer)
 	require.NoError(t, err)
-	assert.Empty(t, fc.CreatedIssues)
-	assert.Empty(t, fc.IssueComments)
-}
-
-func TestPostApprovedFollowUpIssues_SkipsNonActionableFindings(t *testing.T) {
-	fc := forge.NewFakeClient()
-	printer := ui.New(io.Discard)
-	parsed := ReviewResult{
-		Action: "approve",
-		Findings: []ReviewFinding{
-			{
-				Severity:    "info",
-				Category:    "style",
-				File:        "README.md",
-				Description: "Nice-to-have wording improvement.",
-				Actionable:  false,
-			},
-		},
-	}
-
-	err := postApprovedFollowUpIssues(context.Background(), fc, "acme", "repo", 9, parsed, false, maxReviewFollowUpIssues, printer)
-	require.NoError(t, err)
-	assert.Empty(t, fc.CreatedIssues)
-	assert.Empty(t, fc.IssueComments)
-}
-
-func TestPostApprovedFollowUpIssues_SkipsMediumFindings(t *testing.T) {
-	fc := forge.NewFakeClient()
-	printer := ui.New(io.Discard)
-	parsed := ReviewResult{
-		Action: "approve",
-		Findings: []ReviewFinding{
-			{
-				Severity:    "medium",
-				Category:    "missing-test",
-				File:        "internal/service.go",
-				Description: "Medium findings should not be turned into approve follow-ups.",
-				Actionable:  true,
-			},
-		},
-	}
-
-	err := postApprovedFollowUpIssues(context.Background(), fc, "acme", "repo", 9, parsed, false, maxReviewFollowUpIssues, printer)
-	require.NoError(t, err)
-	assert.Empty(t, fc.CreatedIssues)
-	assert.Empty(t, fc.IssueComments)
-}
-
-
-func TestPostApprovedFollowUpIssues_DryRun(t *testing.T) {
-	fc := forge.NewFakeClient()
-	printer := ui.New(io.Discard)
-	parsed := ReviewResult{
-		Action: "approve",
-		Findings: []ReviewFinding{
-			{
-				Severity:    "low",
-				Category:    "docs",
-				File:        "README.md",
-				Description: "Document the behavior.",
-				Actionable:  true,
-			},
-		},
-	}
-
-	err := postApprovedFollowUpIssues(context.Background(), fc, "acme", "repo", 9, parsed, true, maxReviewFollowUpIssues, printer)
-	require.NoError(t, err)
-	assert.Empty(t, fc.CreatedIssues)
-	assert.Empty(t, fc.IssueComments)
-}
-
-
-func TestReviewFollowupIssueMarkerGolden(t *testing.T) {
-	finding := ReviewFinding{
-		Severity:    "low",
-		Category:    "docs",
-		File:        "README.md",
-		Line:        7,
-		Description: "Document the new flag.",
-		Actionable:  true,
-	}
-
-	assert.Equal(t,
-		"<!-- fullsend:review-follow-up:2dda9f082af27ccb771d0345fa8840f7f0ae71547ef1366c4bcfc87e48fdd20d -->",
-		reviewFollowupIssueMarker("acme", "repo", finding),
-	)
-}
-
-func TestCompactWhitespace(t *testing.T) {
-	assert.Equal(t, "one two three", compactWhitespace(" one\n\ttwo   three "))
-	assert.Equal(t, "", compactWhitespace(" \n\t "))
-}
-
-func TestTruncate(t *testing.T) {
-	assert.Equal(t, "", truncate("", 10))
-	assert.Equal(t, "", truncate("abcdef", 0))
-	assert.Equal(t, "ab", truncate("abcdef", 2))
-	assert.Equal(t, "ab...", truncate("abcdef", 5))
-	assert.Equal(t, "éé...", truncate("éééééé", 5))
-	assert.True(t, utf8.ValidString(truncate("abéé", 4)))
 }
