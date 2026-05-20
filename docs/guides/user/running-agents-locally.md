@@ -31,7 +31,7 @@ Extract and move to a directory in your PATH:
 
 ```bash
 tar xzf fullsend_0.4.0_darwin_arm64.tar.gz
-sudo mv fullsend_0.4.0_darwin_arm64/fullsend /usr/local/bin/
+mv fullsend_0.4.0_darwin_arm64/fullsend $HOME/.local/bin/
 ```
 
 Verify the installation:
@@ -58,7 +58,7 @@ Download the gateway binary from the [OpenShell releases](https://github.com/NVI
 # Example for macOS (Apple Silicon)
 curl -fsSL https://github.com/NVIDIA/OpenShell/releases/download/v0.0.38/openshell-gateway-aarch64-apple-darwin.tar.gz \
   -o /tmp/openshell-gateway.tar.gz
-tar xzf /tmp/openshell-gateway.tar.gz -C /usr/local/bin/
+tar xzf /tmp/openshell-gateway.tar.gz -C $HOME/.local/bin/
 ```
 
 ## 3. Clone the .fullsend config directory
@@ -203,7 +203,15 @@ fullsend run <agent> \
 
 The `--env-file` flag loads environment variables before the harness is parsed. It is repeatable — later files override earlier ones.
 
-### Example: triage an issue
+The examples below show the per-agent variables to add to your env file (in addition to the [GCP credentials](#gcp-credentials) and [GitHub tokens](#github-tokens) already configured above).
+
+### Triage an issue
+
+Add to your env file:
+
+```bash
+GITHUB_ISSUE_URL=https://github.com/owner/repo/issues/42
+```
 
 ```bash
 fullsend run triage \
@@ -212,7 +220,15 @@ fullsend run triage \
   --env-file /tmp/fullsend.env
 ```
 
-### Example: review a pull request
+### Review a pull request
+
+Add to your env file:
+
+```bash
+REPO_FULL_NAME=owner/repo
+PR_NUMBER=123
+GITHUB_PR_URL=https://github.com/owner/repo/pull/123
+```
 
 ```bash
 fullsend run review \
@@ -221,7 +237,15 @@ fullsend run review \
   --env-file /tmp/fullsend.env
 ```
 
-### Example: implement an issue
+### Implement an issue
+
+Add to your env file:
+
+```bash
+REPO_FULL_NAME=owner/repo
+ISSUE_NUMBER=42
+TARGET_BRANCH=main
+```
 
 ```bash
 fullsend run code \
@@ -230,7 +254,16 @@ fullsend run code \
   --env-file /tmp/fullsend.env
 ```
 
-### Example: fix review feedback on a PR
+### Fix review feedback on a PR
+
+Add to your env file:
+
+```bash
+REPO_FULL_NAME=owner/repo
+PR_NUMBER=123
+TARGET_BRANCH=main
+REVIEW_BODY_FILE=/path/to/review-body.txt
+```
 
 ```bash
 fullsend run fix \
