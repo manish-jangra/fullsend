@@ -20,7 +20,7 @@ func newInferenceCmd() *cobra.Command {
 These commands only require GCP project access — no GitHub token or
 mint project is needed. Use them to set up Workload Identity Federation
 for Vertex AI inference, then hand off the WIF provider resource name
-to the GitHub admin who runs 'fullsend github setup'.`,
+to the GitHub admin who runs 'fullsend admin install'.`,
 	}
 	cmd.AddCommand(newInferenceProvisionCmd())
 	cmd.AddCommand(newInferenceStatusCmd())
@@ -70,7 +70,7 @@ Repo-scoped mode (e.g. 'fullsend inference provision acme/widget'):
   Creates a WIF pool and a dedicated provider scoped to a single repo.
 
 After provisioning, prints the WIF provider resource name for handoff
-to the GitHub admin who runs 'fullsend github setup'.
+to the GitHub admin who runs 'fullsend admin install'.
 
 WIF pools are always created at locations/global.`,
 		Args: cobra.ExactArgs(1),
@@ -178,7 +178,7 @@ func runInferenceProvision(cmd *cobra.Command, printer *ui.Printer, org, repo, p
 		targetArg = repo
 	}
 	printer.StepInfo("Pass this value to the GitHub setup command:")
-	printer.StepInfo(fmt.Sprintf("  fullsend github setup %s \\", targetArg))
+	printer.StepInfo(fmt.Sprintf("  fullsend admin install %s \\", targetArg))
 	printer.StepInfo(fmt.Sprintf("    --inference-project=%s \\", project))
 	printer.StepInfo(fmt.Sprintf("    --inference-wif-provider=%s", wifProvider))
 	printer.Blank()
@@ -306,7 +306,7 @@ func runInferenceStatus(cmd *cobra.Command, org, repo, project, pool, provider, 
 		expected := fmt.Sprintf("assertion.repository_owner == '%s'", strings.ToLower(org))
 		if condition == expected {
 			result.Details = append(result.Details, "Condition matches org: OK")
-		} else if strings.Contains(condition, fmt.Sprintf("'%s'", strings.ToLower(org))) {
+		} else if strings.Contains(condition, "repository_owner") && strings.Contains(condition, fmt.Sprintf("'%s'", strings.ToLower(org))) {
 			result.Details = append(result.Details, "Condition includes org (multi-org pool): OK")
 		} else {
 			result.Details = append(result.Details, fmt.Sprintf("Condition does not include org %q", org))
@@ -375,7 +375,7 @@ func formatStatusJSON(result *inferenceStatusResult) (string, error) {
 		"status":  result.Status,
 		"details": result.Details,
 	}
-	if result.Status == "healthy" {
+	if result.WIFProvider != "" {
 		data["FULLSEND_GCP_PROJECT_ID"] = result.ProjectID
 		data["FULLSEND_GCP_WIF_PROVIDER"] = result.WIFProvider
 	}
@@ -389,10 +389,9 @@ func formatStatusJSON(result *inferenceStatusResult) (string, error) {
 func formatStatusEnv(result *inferenceStatusResult) string {
 	var sb strings.Builder
 	sb.WriteString(fmt.Sprintf("FULLSEND_INFERENCE_STATUS=%s\n", result.Status))
-	if result.Status != "healthy" {
-		return sb.String()
+	if result.WIFProvider != "" {
+		sb.WriteString(fmt.Sprintf("FULLSEND_GCP_PROJECT_ID=%s\n", result.ProjectID))
+		sb.WriteString(fmt.Sprintf("FULLSEND_GCP_WIF_PROVIDER=%s\n", result.WIFProvider))
 	}
-	sb.WriteString(fmt.Sprintf("FULLSEND_GCP_PROJECT_ID=%s\n", result.ProjectID))
-	sb.WriteString(fmt.Sprintf("FULLSEND_GCP_WIF_PROVIDER=%s\n", result.WIFProvider))
 	return sb.String()
 }
