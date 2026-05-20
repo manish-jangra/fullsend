@@ -9,7 +9,7 @@ This guide walks through running fullsend agents on your machine using released 
 | Requirement | macOS | Linux |
 |-------------|-------|-------|
 | Container runtime | Podman Desktop with a running machine | Podman |
-| OpenShell | 0.0.37-dev+ (Podman support) | 0.0.37-dev+ |
+| [OpenShell](https://github.com/NVIDIA/OpenShell) | 0.0.38 | 0.0.38 |
 | GCP credentials | Service account key (`Vertex AI User` role) | Same |
 | GitHub PAT | `repo` scope for the target org | Same |
 
@@ -39,7 +39,28 @@ Verify the installation:
 fullsend version
 ```
 
-## 2. Clone the .fullsend config directory
+## 2. Install OpenShell
+
+[OpenShell](https://github.com/NVIDIA/OpenShell) provides the sandbox runtime. Install the CLI and download the gateway binary:
+
+```bash
+# Install the CLI (requires uv — https://docs.astral.sh/uv/)
+uv tool install openshell==0.0.38
+
+# Verify
+openshell --version
+```
+
+Download the gateway binary from the [OpenShell releases](https://github.com/NVIDIA/OpenShell/releases/tag/v0.0.38) page. Pick the archive matching your platform and extract it:
+
+```bash
+# Example for macOS (Apple Silicon)
+curl -fsSL https://github.com/NVIDIA/OpenShell/releases/download/v0.0.38/openshell-gateway-aarch64-apple-darwin.tar.gz \
+  -o /tmp/openshell-gateway.tar.gz
+tar xzf /tmp/openshell-gateway.tar.gz -C /usr/local/bin/
+```
+
+## 3. Clone the .fullsend config directory
 
 Each organization has a `.fullsend` config repo containing harness definitions, agent prompts, policies, scripts, and skills. Clone it to a local path:
 
@@ -47,7 +68,7 @@ Each organization has a `.fullsend` config repo containing harness definitions, 
 gh repo clone <org>/.fullsend /tmp/fullsend-dot
 ```
 
-## 3. Create an env file
+## 4. Create an env file
 
 Env files contain secrets and must never be committed. Keep your env file outside the repo (e.g. `/tmp/fullsend.env`).
 
@@ -87,7 +108,35 @@ FULLSEND_SANDBOX_IMAGE=ghcr.io/fullsend-ai/fullsend-sandbox:dev
 
 The default `:latest` tag is amd64-only. The `:dev` tag is a multi-arch image that includes arm64 support. On amd64 hosts this line is not needed.
 
-## 4. Run an agent
+## 5. Start the OpenShell gateway
+
+The fullsend CLI requires a running OpenShell gateway — it will not start one automatically. Start the gateway with the Podman driver:
+
+```bash
+openshell-gateway \
+  --bind-address 127.0.0.1 \
+  --drivers podman \
+  --disable-tls \
+  --db-url "sqlite:/tmp/gateway.db?mode=rwc" &
+```
+
+Wait for the health check to pass, then register the gateway:
+
+```bash
+# Wait for gateway to start
+for i in $(seq 1 15); do
+  curl -sf http://127.0.0.1:8080/healthz >/dev/null 2>&1 && break
+  sleep 2
+done
+
+# Register and select the local gateway
+openshell gateway add http://127.0.0.1:8080 --local --name local
+openshell gateway select local
+```
+
+> On macOS, make sure the Podman machine is running (`podman machine start`) before starting the gateway.
+
+## 6. Run an agent
 
 ```bash
 fullsend run <agent> \
@@ -175,14 +224,15 @@ When using a released binary (this guide's workflow), **strategy 2 applies autom
 
 ### Linux
 
-- **Docker socket permissions**: if using Docker instead of Podman, your user must be in the `docker` group or run with `sudo`. Podman runs rootless by default.
+- **Rootless Podman**: Podman runs rootless by default. Ensure your user has subuids/subgids configured (`grep $USER /etc/subuid`). If not, run `sudo usermod --add-subuids 100000-165535 --add-subgids 100000-165535 $USER && podman system migrate`.
 - **SELinux**: on Fedora/RHEL, bind-mounted volumes may need the `:z` suffix for standalone `podman run`. OpenShell handles this automatically.
 
 ## Troubleshooting
 
 **Sandbox creation fails immediately**
 - Check that `podman machine start` has been run (macOS only)
-- Verify OpenShell is installed: `openshell version`
+- Verify OpenShell is installed: `openshell --version`
+- Verify the gateway is running: `openshell gateway list`
 
 **`Syntax error: "(" unexpected` inside sandbox**
 - The macOS Mach-O binary was injected instead of a Linux ELF. Update to fullsend 0.4.0+ which auto-resolves the correct binary, or provide one explicitly with `--fullsend-binary`
