@@ -10,7 +10,7 @@ This guide walks through running fullsend agents on your machine using released 
 |-------------|-------|-------|
 | Container runtime | Podman Desktop with a running machine | Podman |
 | [OpenShell](https://github.com/NVIDIA/OpenShell) | 0.0.38 | 0.0.38 |
-| GCP project | [Agent Platform API](https://console.cloud.google.com/apis/library/aiplatform.googleapis.com) enabled with [Claude models](https://console.cloud.google.com/vertex-ai/model-garden) | Same |
+| GCP project | [Agent Platform API](https://console.cloud.google.com/apis/library/aiplatform.googleapis.com) enabled with [Claude models](https://console.cloud.google.com/vertex-ai/model-garden) enabled | Same |
 | GCP credentials | Service account key (see [GCP credentials](#gcp-credentials) below) | Same |
 | GitHub PAT | Classic PAT with `repo` scope (see [GitHub tokens](#github-tokens) below) | Same |
 
@@ -75,14 +75,16 @@ Env files contain secrets and must never be committed. Keep your env file outsid
 
 ### GCP credentials
 
-Fullsend agents use Claude models via [Vertex AI](https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/partner-models/claude/use-claude). Your GCP project must have:
+Fullsend agents use Claude models via [Agent Platform (Vertex AI)](https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/partner-models/claude/use-claude). Your GCP project must have:
 
 1. The [Agent Platform API](https://console.cloud.google.com/apis/library/aiplatform.googleapis.com) enabled
 2. Claude models enabled in [Model Garden](https://console.cloud.google.com/vertex-ai/model-garden) — search for "Claude" and enable the Anthropic models you need (all agents default to Claude Opus)
 
+> **Cost:** Claude model calls on Agent Platform (Vertex AI) incur per-token charges billed to the GCP project. If you need a new project, request one through your IT team. If using an existing project, contact your GCP project admin to have a service account and key created for you — you may not have the IAM permissions to do this yourself.
+
 In CI, fullsend uses [Workload Identity Federation (WIF)](https://cloud.google.com/iam/docs/workload-identity-federation) — no service account keys are stored. Locally, use a service account key instead.
 
-**Create a service account and key:**
+**Create a service account and key** (requires `roles/iam.serviceAccountAdmin` on the project):
 
 ```bash
 # Create a service account
@@ -90,7 +92,7 @@ gcloud iam service-accounts create fullsend-local \
   --display-name="Fullsend local agent runner" \
   --project=<project-id>
 
-# Grant Vertex AI User role (call Claude models via Vertex AI)
+# Grant Vertex AI User role (call Claude models via Agent Platform)
 gcloud projects add-iam-policy-binding <project-id> \
   --member="serviceAccount:fullsend-local@<project-id>.iam.gserviceaccount.com" \
   --role="roles/aiplatform.user"
