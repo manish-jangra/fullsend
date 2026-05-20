@@ -113,7 +113,7 @@ Fullsend uses a three-tier inheritance model for all configuration: agent defini
 │  └──────────────────────┘                                    │
 │                                                              │
 │  Layered directories:                                        │
-│    agents/  skills/  schemas/  harness/                      │
+│    agents/  skills/  schemas/  harness/  plugins/             │
 │    policies/  scripts/  env/                                 │
 │                                                              │
 └──────────────────────────────────────────────────────────────┘

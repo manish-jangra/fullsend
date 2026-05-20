@@ -386,8 +386,8 @@ func verifyInstalled(t *testing.T, env *e2eEnv, orgCfg *config.OrgConfig, enable
 
 	// Agent runtime files exist (from scaffold).
 	// ADR 35: only non-layered, non-upstream-only files are installed.
-	// Layered dirs (agents/, skills/, schemas/, harness/, policies/, scripts/,
-	// env/) and upstream-only dirs (.github/actions/, .github/scripts/) are
+	// Layered dirs (agents/, skills/, schemas/, harness/, plugins/, policies/,
+	// scripts/, env/) and upstream-only dirs (.github/actions/, .github/scripts/) are
 	// provided at runtime via sparse checkout in reusable workflows.
 	for _, path := range []string{
 		".github/workflows/triage.yml",
@@ -402,6 +402,7 @@ func verifyInstalled(t *testing.T, env *e2eEnv, orgCfg *config.OrgConfig, enable
 		"customized/skills/.gitkeep",
 		"customized/schemas/.gitkeep",
 		"customized/harness/.gitkeep",
+		"customized/plugins/.gitkeep",
 		"customized/policies/.gitkeep",
 		"customized/scripts/.gitkeep",
 		"customized/env/.gitkeep",
