@@ -3,7 +3,6 @@ package cli
 import (
 	"encoding/json"
 	"fmt"
-	"os"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -23,7 +22,7 @@ mint project is needed. Use them to set up Workload Identity Federation
 for Vertex AI inference, then hand off the WIF provider resource name
 to the GitHub admin who runs 'fullsend github setup'.`,
 	}
-	cmd.AddCommand(newInferenceProvisionWIFCmd())
+	cmd.AddCommand(newInferenceProvisionCmd())
 	cmd.AddCommand(newInferenceStatusCmd())
 	return cmd
 }
@@ -52,27 +51,28 @@ func parseOrgOrRepo(arg string) (org string, repo string, err error) {
 	return arg, "", nil
 }
 
-func newInferenceProvisionWIFCmd() *cobra.Command {
+func newInferenceProvisionCmd() *cobra.Command {
 	var project string
-	var region string
 	var pool string
 	var provider string
 	var dryRun bool
 
 	cmd := &cobra.Command{
-		Use:   "provision-wif <org|owner/repo>",
+		Use:   "provision <org|owner/repo>",
 		Short: "Create WIF infrastructure for inference",
 		Long: `Provisions Workload Identity Federation infrastructure in a GCP project
 for GitHub Actions to authenticate and access Vertex AI.
 
-Org-scoped mode (e.g. 'fullsend inference provision-wif acme'):
+Org-scoped mode (e.g. 'fullsend inference provision acme'):
   Creates a WIF pool and provider scoped to all repos in the org.
 
-Repo-scoped mode (e.g. 'fullsend inference provision-wif acme/widget'):
+Repo-scoped mode (e.g. 'fullsend inference provision acme/widget'):
   Creates a WIF pool and a dedicated provider scoped to a single repo.
 
 After provisioning, prints the WIF provider resource name for handoff
-to the GitHub admin who runs 'fullsend github setup'.`,
+to the GitHub admin who runs 'fullsend github setup'.
+
+WIF pools are always created at locations/global.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if project == "" {
@@ -84,26 +84,29 @@ to the GitHub admin who runs 'fullsend github setup'.`,
 				return err
 			}
 
-			printer := ui.New(os.Stdout)
-
-			if dryRun {
-				return runInferenceProvisionWIFDryRun(cmd, printer, org, repo, project, region, pool, provider)
+			if repo != "" && cmd.Flags().Changed("provider") {
+				return fmt.Errorf("--provider is not supported in repo-scoped mode (provider ID is auto-generated from owner/repo)")
 			}
 
-			return runInferenceProvisionWIF(cmd, printer, org, repo, project, region, pool, provider)
+			printer := ui.New(cmd.OutOrStdout())
+
+			if dryRun {
+				return runInferenceProvisionDryRun(cmd, printer, org, repo, project, pool, provider)
+			}
+
+			return runInferenceProvision(cmd, printer, org, repo, project, pool, provider)
 		},
 	}
 
 	cmd.Flags().StringVar(&project, "project", "", "GCP project ID for Vertex AI (required)")
-	cmd.Flags().StringVar(&region, "region", "global", "WIF location (default: global)")
 	cmd.Flags().StringVar(&pool, "pool", "fullsend-pool", "WIF pool name")
-	cmd.Flags().StringVar(&provider, "provider", "github-oidc", "WIF provider name")
+	cmd.Flags().StringVar(&provider, "provider", "github-oidc", "WIF provider name (org-scoped only)")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "preview changes without making them")
 
 	return cmd
 }
 
-func runInferenceProvisionWIFDryRun(cmd *cobra.Command, printer *ui.Printer, org, repo, project, region, pool, provider string) error {
+func runInferenceProvisionDryRun(cmd *cobra.Command, printer *ui.Printer, org, repo, project, pool, provider string) error {
 	printer.Banner()
 	printer.Blank()
 
@@ -111,24 +114,23 @@ func runInferenceProvisionWIFDryRun(cmd *cobra.Command, printer *ui.Printer, org
 		printer.Header("Dry run: provision WIF for repo-scoped inference")
 		printer.Blank()
 		printer.StepInfo(fmt.Sprintf("Repository:   %s", repo))
-		providerID := gcf.BuildRepoProviderID(strings.SplitN(repo, "/", 2)[0], strings.SplitN(repo, "/", 2)[1])
+		parts := strings.SplitN(repo, "/", 2)
+		providerID := gcf.BuildRepoProviderID(parts[0], parts[1])
 		printer.StepInfo(fmt.Sprintf("WIF provider: %s (repo-scoped)", providerID))
-		printer.StepInfo(fmt.Sprintf("Condition:    assertion.repository == '%s'", repo))
+		printer.StepInfo(fmt.Sprintf("Condition:    assertion.repository == '%s'", strings.ToLower(repo)))
 	} else {
 		printer.Header("Dry run: provision WIF for org-scoped inference")
 		printer.Blank()
 		printer.StepInfo(fmt.Sprintf("Organization: %s", org))
 		printer.StepInfo(fmt.Sprintf("WIF provider: %s (org-scoped)", provider))
-		printer.StepInfo(fmt.Sprintf("Condition:    assertion.repository_owner == '%s'", org))
+		printer.StepInfo(fmt.Sprintf("Condition:    assertion.repository_owner == '%s'", strings.ToLower(org)))
 	}
 
 	printer.Blank()
 	printer.StepInfo(fmt.Sprintf("GCP project:  %s", project))
-	printer.StepInfo(fmt.Sprintf("WIF location: %s", region))
 	printer.StepInfo(fmt.Sprintf("WIF pool:     %s", pool))
 	printer.Blank()
 	printer.StepInfo("Would create/update:")
-	printer.StepInfo("  - Service account: fullsend-mint")
 	printer.StepInfo(fmt.Sprintf("  - WIF pool: %s", pool))
 	printer.StepInfo("  - WIF OIDC provider")
 	printer.StepInfo("  - IAM binding: roles/aiplatform.user")
@@ -137,7 +139,7 @@ func runInferenceProvisionWIFDryRun(cmd *cobra.Command, printer *ui.Printer, org
 	return nil
 }
 
-func runInferenceProvisionWIF(cmd *cobra.Command, printer *ui.Printer, org, repo, project, region, pool, provider string) error {
+func runInferenceProvision(cmd *cobra.Command, printer *ui.Printer, org, repo, project, pool, provider string) error {
 	printer.Banner()
 	printer.Blank()
 
@@ -171,7 +173,6 @@ func runInferenceProvisionWIF(cmd *cobra.Command, printer *ui.Printer, org, repo
 	printer.KeyValue("WIF Provider", wifProvider)
 	printer.Blank()
 
-	// Print suggested next command.
 	targetArg := org
 	if repo != "" {
 		targetArg = repo
@@ -179,8 +180,7 @@ func runInferenceProvisionWIF(cmd *cobra.Command, printer *ui.Printer, org, repo
 	printer.StepInfo("Pass this value to the GitHub setup command:")
 	printer.StepInfo(fmt.Sprintf("  fullsend github setup %s \\", targetArg))
 	printer.StepInfo(fmt.Sprintf("    --inference-project=%s \\", project))
-	printer.StepInfo(fmt.Sprintf("    --inference-wif-provider=%s \\", wifProvider))
-	printer.StepInfo(fmt.Sprintf("    --inference-region=%s", region))
+	printer.StepInfo(fmt.Sprintf("    --inference-wif-provider=%s", wifProvider))
 	printer.Blank()
 	printer.StepWarn("IAM policy changes may take up to 7 minutes to propagate")
 	printer.Blank()
@@ -193,13 +193,13 @@ type inferenceStatusResult struct {
 	Status      string
 	ProjectID   string
 	WIFProvider string
-	Region      string
 	Details     []string // human-readable status lines
 }
 
 func newInferenceStatusCmd() *cobra.Command {
 	var project string
-	var region string
+	var pool string
+	var provider string
 	var format string
 
 	cmd := &cobra.Command{
@@ -228,23 +228,28 @@ Use --format=json to get a machine-readable status + config output.`,
 				return err
 			}
 
-			return runInferenceStatus(cmd, org, repo, project, region, format)
+			if repo != "" && cmd.Flags().Changed("provider") {
+				return fmt.Errorf("--provider is not supported in repo-scoped mode (provider ID is auto-generated from owner/repo)")
+			}
+
+			return runInferenceStatus(cmd, org, repo, project, pool, provider, format)
 		},
 	}
 
 	cmd.Flags().StringVar(&project, "project", "", "GCP project ID for Vertex AI (required)")
-	cmd.Flags().StringVar(&region, "region", "global", "WIF location (default: global)")
+	cmd.Flags().StringVar(&pool, "pool", "fullsend-pool", "WIF pool name")
+	cmd.Flags().StringVar(&provider, "provider", "github-oidc", "WIF provider name")
 	cmd.Flags().StringVar(&format, "format", "text", "output format: text, json, env")
 
 	return cmd
 }
 
-func runInferenceStatus(cmd *cobra.Command, org, repo, project, region, format string) error {
+func runInferenceStatus(cmd *cobra.Command, org, repo, project, pool, provider, format string) error {
 	ctx := cmd.Context()
 	gcpClient := gcf.NewLiveGCFClient()
 
-	poolName := "fullsend-pool"
-	providerName := "github-oidc"
+	poolName := pool
+	providerName := provider
 	if repo != "" {
 		parts := strings.SplitN(repo, "/", 2)
 		providerName = gcf.BuildRepoProviderID(parts[0], parts[1])
@@ -252,7 +257,6 @@ func runInferenceStatus(cmd *cobra.Command, org, repo, project, region, format s
 
 	result := &inferenceStatusResult{
 		ProjectID: project,
-		Region:    region,
 	}
 
 	// Step 1: Look up project number.
@@ -275,7 +279,7 @@ func runInferenceStatus(cmd *cobra.Command, org, repo, project, region, format s
 	if providerInfo == nil {
 		result.Status = "not_provisioned"
 		result.Details = append(result.Details, fmt.Sprintf("WIF pool %q or provider %q not found", poolName, providerName))
-		result.Details = append(result.Details, "Run 'fullsend inference provision-wif' to create the infrastructure")
+		result.Details = append(result.Details, "Run 'fullsend inference provision' to create the infrastructure")
 		return outputStatus(cmd, result, format)
 	}
 
@@ -289,22 +293,32 @@ func runInferenceStatus(cmd *cobra.Command, org, repo, project, region, format s
 	result.Details = append(result.Details, "WIF provider: "+wifProvider)
 	result.Details = append(result.Details, "Attribute condition: "+condition)
 
+	conditionOK := true
 	if repo != "" {
 		expected := fmt.Sprintf("assertion.repository == '%s'", strings.ToLower(repo))
 		if condition == expected {
 			result.Details = append(result.Details, "Condition matches repo: OK")
 		} else {
 			result.Details = append(result.Details, fmt.Sprintf("Condition mismatch: expected %q", expected))
+			conditionOK = false
 		}
 	} else {
-		if strings.Contains(condition, org) {
-			result.Details = append(result.Details, "Condition includes org: OK")
+		expected := fmt.Sprintf("assertion.repository_owner == '%s'", strings.ToLower(org))
+		if condition == expected {
+			result.Details = append(result.Details, "Condition matches org: OK")
+		} else if strings.Contains(condition, fmt.Sprintf("'%s'", strings.ToLower(org))) {
+			result.Details = append(result.Details, "Condition includes org (multi-org pool): OK")
 		} else {
 			result.Details = append(result.Details, fmt.Sprintf("Condition does not include org %q", org))
+			conditionOK = false
 		}
 	}
 
-	result.Status = "healthy"
+	if conditionOK {
+		result.Status = "healthy"
+	} else {
+		result.Status = "unhealthy"
+	}
 	return outputStatus(cmd, result, format)
 }
 
@@ -328,6 +342,8 @@ func outputStatus(cmd *cobra.Command, result *inferenceStatusResult, format stri
 		switch result.Status {
 		case "healthy":
 			printer.StepDone("Status: healthy")
+		case "unhealthy":
+			printer.StepWarn("Status: unhealthy (condition mismatch)")
 		case "not_provisioned":
 			printer.StepFail("Status: not provisioned")
 		default:
@@ -344,7 +360,6 @@ func outputStatus(cmd *cobra.Command, result *inferenceStatusResult, format stri
 			printer.Blank()
 			printer.KeyValue("FULLSEND_GCP_PROJECT_ID", result.ProjectID)
 			printer.KeyValue("FULLSEND_GCP_WIF_PROVIDER", result.WIFProvider)
-			printer.KeyValue("FULLSEND_GCP_REGION", result.Region)
 			printer.Blank()
 		}
 	}
@@ -356,11 +371,13 @@ func outputStatus(cmd *cobra.Command, result *inferenceStatusResult, format stri
 }
 
 func formatStatusJSON(result *inferenceStatusResult) (string, error) {
-	data := map[string]string{
-		"status":                    result.Status,
-		"FULLSEND_GCP_PROJECT_ID":   result.ProjectID,
-		"FULLSEND_GCP_WIF_PROVIDER": result.WIFProvider,
-		"FULLSEND_GCP_REGION":       result.Region,
+	data := map[string]interface{}{
+		"status":  result.Status,
+		"details": result.Details,
+	}
+	if result.Status == "healthy" {
+		data["FULLSEND_GCP_PROJECT_ID"] = result.ProjectID
+		data["FULLSEND_GCP_WIF_PROVIDER"] = result.WIFProvider
 	}
 	b, err := json.MarshalIndent(data, "", "  ")
 	if err != nil {
@@ -371,8 +388,11 @@ func formatStatusJSON(result *inferenceStatusResult) (string, error) {
 
 func formatStatusEnv(result *inferenceStatusResult) string {
 	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("FULLSEND_INFERENCE_STATUS=%s\n", result.Status))
+	if result.Status != "healthy" {
+		return sb.String()
+	}
 	sb.WriteString(fmt.Sprintf("FULLSEND_GCP_PROJECT_ID=%s\n", result.ProjectID))
 	sb.WriteString(fmt.Sprintf("FULLSEND_GCP_WIF_PROVIDER=%s\n", result.WIFProvider))
-	sb.WriteString(fmt.Sprintf("FULLSEND_GCP_REGION=%s\n", result.Region))
 	return sb.String()
 }

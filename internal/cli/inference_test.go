@@ -14,7 +14,7 @@ func TestInferenceCommand_HasSubcommands(t *testing.T) {
 	for _, sub := range cmd.Commands() {
 		names[sub.Name()] = true
 	}
-	assert.True(t, names["provision-wif"], "expected provision-wif subcommand")
+	assert.True(t, names["provision"], "expected provision subcommand")
 	assert.True(t, names["status"], "expected status subcommand")
 }
 
@@ -30,33 +30,29 @@ func TestInferenceCommand_RegisteredInRoot(t *testing.T) {
 	assert.True(t, found, "expected inference subcommand registered in root")
 }
 
-// --- provision-wif tests ---
+// --- provision tests ---
 
-func TestInferenceProvisionWIFCmd_RequiresArg(t *testing.T) {
+func TestInferenceProvisionCmd_RequiresArg(t *testing.T) {
 	cmd := newRootCmd()
-	cmd.SetArgs([]string{"inference", "provision-wif"})
+	cmd.SetArgs([]string{"inference", "provision"})
 	err := cmd.Execute()
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "accepts 1 arg(s)")
 }
 
-func TestInferenceProvisionWIFCmd_RequiresProject(t *testing.T) {
+func TestInferenceProvisionCmd_RequiresProject(t *testing.T) {
 	cmd := newRootCmd()
-	cmd.SetArgs([]string{"inference", "provision-wif", "acme"})
+	cmd.SetArgs([]string{"inference", "provision", "acme"})
 	err := cmd.Execute()
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "--project is required")
 }
 
-func TestInferenceProvisionWIFCmd_Flags(t *testing.T) {
-	cmd := newInferenceProvisionWIFCmd()
+func TestInferenceProvisionCmd_Flags(t *testing.T) {
+	cmd := newInferenceProvisionCmd()
 
 	projectFlag := cmd.Flags().Lookup("project")
 	require.NotNil(t, projectFlag, "expected --project flag")
-
-	regionFlag := cmd.Flags().Lookup("region")
-	require.NotNil(t, regionFlag, "expected --region flag")
-	assert.Equal(t, "global", regionFlag.DefValue)
 
 	poolFlag := cmd.Flags().Lookup("pool")
 	require.NotNil(t, poolFlag, "expected --pool flag")
@@ -68,12 +64,14 @@ func TestInferenceProvisionWIFCmd_Flags(t *testing.T) {
 
 	dryRunFlag := cmd.Flags().Lookup("dry-run")
 	require.NotNil(t, dryRunFlag, "expected --dry-run flag")
+
+	assert.Nil(t, cmd.Flags().Lookup("region"), "should not have --region flag")
 }
 
-func TestInferenceProvisionWIFCmd_DetectsOrgMode(t *testing.T) {
+func TestInferenceProvisionCmd_DetectsOrgMode(t *testing.T) {
 	// Org-scoped: arg without "/"
 	cmd := newRootCmd()
-	cmd.SetArgs([]string{"inference", "provision-wif", "acme",
+	cmd.SetArgs([]string{"inference", "provision", "acme",
 		"--project", "my-project",
 		"--dry-run"})
 	err := cmd.Execute()
@@ -81,10 +79,10 @@ func TestInferenceProvisionWIFCmd_DetectsOrgMode(t *testing.T) {
 	require.NoError(t, err)
 }
 
-func TestInferenceProvisionWIFCmd_DetectsRepoMode(t *testing.T) {
+func TestInferenceProvisionCmd_DetectsRepoMode(t *testing.T) {
 	// Repo-scoped: arg with "/"
 	cmd := newRootCmd()
-	cmd.SetArgs([]string{"inference", "provision-wif", "acme/widget",
+	cmd.SetArgs([]string{"inference", "provision", "acme/widget",
 		"--project", "my-project",
 		"--dry-run"})
 	err := cmd.Execute()
@@ -92,27 +90,27 @@ func TestInferenceProvisionWIFCmd_DetectsRepoMode(t *testing.T) {
 	require.NoError(t, err)
 }
 
-func TestInferenceProvisionWIFCmd_DryRunOrgSucceeds(t *testing.T) {
+func TestInferenceProvisionCmd_DryRunOrgSucceeds(t *testing.T) {
 	cmd := newRootCmd()
-	cmd.SetArgs([]string{"inference", "provision-wif", "acme",
+	cmd.SetArgs([]string{"inference", "provision", "acme",
 		"--project", "my-project",
 		"--dry-run"})
 	err := cmd.Execute()
 	require.NoError(t, err)
 }
 
-func TestInferenceProvisionWIFCmd_DryRunRepoSucceeds(t *testing.T) {
+func TestInferenceProvisionCmd_DryRunRepoSucceeds(t *testing.T) {
 	cmd := newRootCmd()
-	cmd.SetArgs([]string{"inference", "provision-wif", "acme/widget",
+	cmd.SetArgs([]string{"inference", "provision", "acme/widget",
 		"--project", "my-project",
 		"--dry-run"})
 	err := cmd.Execute()
 	require.NoError(t, err)
 }
 
-func TestInferenceProvisionWIFCmd_DryRunCustomPool(t *testing.T) {
+func TestInferenceProvisionCmd_DryRunCustomPool(t *testing.T) {
 	cmd := newRootCmd()
-	cmd.SetArgs([]string{"inference", "provision-wif", "acme",
+	cmd.SetArgs([]string{"inference", "provision", "acme",
 		"--project", "my-project",
 		"--pool", "custom-pool",
 		"--provider", "custom-provider",
@@ -121,31 +119,31 @@ func TestInferenceProvisionWIFCmd_DryRunCustomPool(t *testing.T) {
 	require.NoError(t, err)
 }
 
-func TestInferenceProvisionWIFCmd_RejectsInvalidOrgName(t *testing.T) {
+func TestInferenceProvisionCmd_RejectsInvalidOrgName(t *testing.T) {
 	cmd := newRootCmd()
-	cmd.SetArgs([]string{"inference", "provision-wif", "-invalid",
+	cmd.SetArgs([]string{"inference", "provision", "-invalid",
 		"--project", "my-project"})
 	err := cmd.Execute()
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "invalid")
 }
 
-func TestInferenceProvisionWIFCmd_RejectsInvalidRepoFormat(t *testing.T) {
+func TestInferenceProvisionCmd_RejectsInvalidRepoFormat(t *testing.T) {
 	cmd := newRootCmd()
-	cmd.SetArgs([]string{"inference", "provision-wif", "acme/",
+	cmd.SetArgs([]string{"inference", "provision", "acme/",
 		"--project", "my-project"})
 	err := cmd.Execute()
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "invalid")
 }
 
-func TestInferenceProvisionWIFCmd_DoesNotRequireGitHubToken(t *testing.T) {
+func TestInferenceProvisionCmd_DoesNotRequireGitHubToken(t *testing.T) {
 	// Unset all GitHub tokens to prove they're not needed.
 	t.Setenv("GH_TOKEN", "")
 	t.Setenv("GITHUB_TOKEN", "")
 
 	cmd := newRootCmd()
-	cmd.SetArgs([]string{"inference", "provision-wif", "acme",
+	cmd.SetArgs([]string{"inference", "provision", "acme",
 		"--project", "my-project",
 		"--dry-run"})
 	err := cmd.Execute()
@@ -177,13 +175,19 @@ func TestInferenceStatusCmd_Flags(t *testing.T) {
 	projectFlag := cmd.Flags().Lookup("project")
 	require.NotNil(t, projectFlag, "expected --project flag")
 
-	regionFlag := cmd.Flags().Lookup("region")
-	require.NotNil(t, regionFlag, "expected --region flag")
-	assert.Equal(t, "global", regionFlag.DefValue)
+	poolFlag := cmd.Flags().Lookup("pool")
+	require.NotNil(t, poolFlag, "expected --pool flag")
+	assert.Equal(t, "fullsend-pool", poolFlag.DefValue)
+
+	providerFlag := cmd.Flags().Lookup("provider")
+	require.NotNil(t, providerFlag, "expected --provider flag")
+	assert.Equal(t, "github-oidc", providerFlag.DefValue)
 
 	formatFlag := cmd.Flags().Lookup("format")
 	require.NotNil(t, formatFlag, "expected --format flag")
 	assert.Equal(t, "text", formatFlag.DefValue)
+
+	assert.Nil(t, cmd.Flags().Lookup("region"), "should not have --region flag")
 }
 
 func TestInferenceStatusCmd_RejectsInvalidFormat(t *testing.T) {
@@ -257,20 +261,41 @@ func TestFormatStatusJSON(t *testing.T) {
 		Status:      "healthy",
 		ProjectID:   "my-project",
 		WIFProvider: "projects/123/locations/global/workloadIdentityPools/fullsend-pool/providers/github-oidc",
-		Region:      "global",
+		Details:     []string{"Project number: 123", "WIF provider: found"},
 	}
 
 	output, err := formatStatusJSON(result)
 	require.NoError(t, err)
 
-	var parsed map[string]string
+	var parsed map[string]interface{}
 	err = json.Unmarshal([]byte(output), &parsed)
 	require.NoError(t, err)
 
 	assert.Equal(t, "healthy", parsed["status"])
 	assert.Equal(t, "my-project", parsed["FULLSEND_GCP_PROJECT_ID"])
 	assert.Equal(t, "projects/123/locations/global/workloadIdentityPools/fullsend-pool/providers/github-oidc", parsed["FULLSEND_GCP_WIF_PROVIDER"])
-	assert.Equal(t, "global", parsed["FULLSEND_GCP_REGION"])
+	details, ok := parsed["details"].([]interface{})
+	require.True(t, ok, "expected details to be an array")
+	assert.Len(t, details, 2)
+}
+
+func TestFormatStatusJSON_Unhealthy(t *testing.T) {
+	result := &inferenceStatusResult{
+		Status:    "error",
+		ProjectID: "my-project",
+		Details:   []string{"Failed to get project number"},
+	}
+
+	output, err := formatStatusJSON(result)
+	require.NoError(t, err)
+
+	var parsed map[string]interface{}
+	err = json.Unmarshal([]byte(output), &parsed)
+	require.NoError(t, err)
+
+	assert.Equal(t, "error", parsed["status"])
+	assert.Nil(t, parsed["FULLSEND_GCP_PROJECT_ID"], "should not include config keys when unhealthy")
+	assert.Nil(t, parsed["FULLSEND_GCP_WIF_PROVIDER"], "should not include config keys when unhealthy")
 }
 
 // --- formatStatusEnv tests ---
@@ -280,13 +305,44 @@ func TestFormatStatusEnv(t *testing.T) {
 		Status:      "healthy",
 		ProjectID:   "my-project",
 		WIFProvider: "projects/123/locations/global/workloadIdentityPools/fullsend-pool/providers/github-oidc",
-		Region:      "global",
 	}
 
 	output := formatStatusEnv(result)
+	assert.Contains(t, output, "FULLSEND_INFERENCE_STATUS=healthy")
 	assert.Contains(t, output, "FULLSEND_GCP_PROJECT_ID=my-project")
 	assert.Contains(t, output, "FULLSEND_GCP_WIF_PROVIDER=projects/123/locations/global/workloadIdentityPools/fullsend-pool/providers/github-oidc")
-	assert.Contains(t, output, "FULLSEND_GCP_REGION=global")
-	// env format should not contain status decoration
+	assert.NotContains(t, output, "FULLSEND_GCP_REGION")
 	assert.NotContains(t, output, "Status:")
+}
+
+func TestFormatStatusEnv_Unhealthy(t *testing.T) {
+	result := &inferenceStatusResult{
+		Status:    "unhealthy",
+		ProjectID: "my-project",
+	}
+
+	output := formatStatusEnv(result)
+	assert.Contains(t, output, "FULLSEND_INFERENCE_STATUS=unhealthy")
+	assert.NotContains(t, output, "FULLSEND_GCP_PROJECT_ID")
+	assert.NotContains(t, output, "FULLSEND_GCP_WIF_PROVIDER")
+}
+
+func TestInferenceStatusCmd_RejectsProviderInRepoMode(t *testing.T) {
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"inference", "status", "acme/widget",
+		"--project", "my-project",
+		"--provider", "custom-provider"})
+	err := cmd.Execute()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "--provider is not supported in repo-scoped mode")
+}
+
+func TestInferenceProvisionCmd_RejectsProviderInRepoMode(t *testing.T) {
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"inference", "provision", "acme/widget",
+		"--project", "my-project",
+		"--provider", "custom-provider"})
+	err := cmd.Execute()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "--provider is not supported in repo-scoped mode")
 }
