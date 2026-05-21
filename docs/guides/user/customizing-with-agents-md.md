@@ -2,7 +2,7 @@
 
 Fullsend agents operate on your repository using Claude Code inside a sandboxed
 environment. Because agents run with your repo checked out, they automatically
-read your `AGENTS.md` file — the same file human contributors use. No fullsend
+read its `AGENTS.md` file — the same file human contributors use. No fullsend
 configuration changes needed.
 
 For agent-specific customization using skills, see

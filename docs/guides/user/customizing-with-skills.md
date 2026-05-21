@@ -110,6 +110,7 @@ These skills ship with fullsend and can be overloaded:
 | [Code](../../agents/code.md) | `code-implementation` | Step-by-step implementation procedure |
 | [Review](../../agents/review.md) | `code-review`, `pr-review`, `docs-review` | Review evaluation across dimensions |
 | [Fix](../../agents/fix.md) | `fix-review` | Review feedback interpretation and fix strategy |
+| [Prioritize](../../agents/prioritize.md) | `customer-research` | Customer data gathering for RICE scoring (extension point) |
 | [Retro](../../agents/retro.md) | `retro-analysis`, `finding-agent-runs` | Workflow analysis and proposal generation |
 
 ### Extension points
