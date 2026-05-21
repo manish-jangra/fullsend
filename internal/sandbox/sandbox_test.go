@@ -312,6 +312,48 @@ func TestSanitizeDownload_EmptyDir(t *testing.T) {
 	assert.NoError(t, err)
 }
 
+func TestEffectiveReadyTimeout_Default(t *testing.T) {
+	t.Setenv("FULLSEND_SANDBOX_READY_TIMEOUT", "")
+	got := effectiveReadyTimeout(0)
+	assert.Equal(t, readyTimeout, got)
+}
+
+func TestEffectiveReadyTimeout_Override(t *testing.T) {
+	got := effectiveReadyTimeout(90 * time.Second)
+	assert.Equal(t, 90*time.Second, got)
+}
+
+func TestEffectiveReadyTimeout_EnvVar(t *testing.T) {
+	t.Setenv("FULLSEND_SANDBOX_READY_TIMEOUT", "180s")
+	got := effectiveReadyTimeout(0)
+	assert.Equal(t, 180*time.Second, got)
+}
+
+func TestEffectiveReadyTimeout_OverrideTakesPrecedenceOverEnv(t *testing.T) {
+	t.Setenv("FULLSEND_SANDBOX_READY_TIMEOUT", "180s")
+	got := effectiveReadyTimeout(90 * time.Second)
+	assert.Equal(t, 90*time.Second, got)
+}
+
+func TestEffectiveReadyTimeout_InvalidEnvVar(t *testing.T) {
+	t.Setenv("FULLSEND_SANDBOX_READY_TIMEOUT", "not-a-duration")
+	got := effectiveReadyTimeout(0)
+	assert.Equal(t, readyTimeout, got)
+}
+
+func TestEffectiveReadyTimeout_NegativeEnvVar(t *testing.T) {
+	t.Setenv("FULLSEND_SANDBOX_READY_TIMEOUT", "-30s")
+	got := effectiveReadyTimeout(0)
+	assert.Equal(t, readyTimeout, got)
+}
+
+func TestCreateWithRetry_OpenshellNotInPath(t *testing.T) {
+	t.Setenv("PATH", "")
+
+	err := CreateWithRetry("test-sandbox", nil, "", "", 1, 0)
+	assert.Error(t, err)
+}
+
 func TestUploadDir_OpenshellNotInPath(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("PATH", "")

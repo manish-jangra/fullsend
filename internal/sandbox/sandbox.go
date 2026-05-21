@@ -18,10 +18,14 @@ const (
 	// SandboxClaudeConfig is the Claude config directory inside the sandbox.
 	SandboxClaudeConfig = "/tmp/claude-config" //nolint:gosec // not a credential
 
-	createTimeout   = 65 * time.Second
-	readyTimeout    = 60 * time.Second
+	createTimeout   = 130 * time.Second
+	readyTimeout    = 120 * time.Second
 	readyPoll       = 2 * time.Second
 	transferTimeout = 5 * time.Minute
+
+	defaultMaxCreateAttempts = 3
+	retryInitialBackoff      = 5 * time.Second
+	retryMaxBackoff          = 15 * time.Second
 )
 
 func sanitizeDownload(localDir string) error {
@@ -149,12 +153,63 @@ func CheckGateway() error {
 	return nil
 }
 
-// Create creates a persistent OpenShell sandbox and waits for it to be ready.
-// If providers are given, they are passed as --provider flags. If image is
-// non-empty, it is passed as --from to start the sandbox from a container image.
-// If policy is non-empty, it is applied at creation time via --policy.
+// effectiveReadyTimeout returns the sandbox ready timeout to use. Priority:
+// explicit override (from harness config) > FULLSEND_SANDBOX_READY_TIMEOUT
+// env var > package default.
+func effectiveReadyTimeout(override time.Duration) time.Duration {
+	if override > 0 {
+		return override
+	}
+	if envVal := os.Getenv("FULLSEND_SANDBOX_READY_TIMEOUT"); envVal != "" {
+		if d, err := time.ParseDuration(envVal); err == nil && d > 0 {
+			return d
+		}
+	}
+	return readyTimeout
+}
+
+// Create creates a persistent OpenShell sandbox and waits for it to be ready,
+// retrying up to defaultMaxCreateAttempts times with exponential backoff.
 func Create(name string, providers []string, image, policy string) error {
-	ctx, cancel := context.WithTimeout(context.Background(), createTimeout)
+	return CreateWithRetry(name, providers, image, policy, defaultMaxCreateAttempts, 0)
+}
+
+// CreateWithRetry creates a sandbox, retrying up to maxAttempts times with
+// exponential backoff on failure. Between attempts the failed sandbox is
+// deleted to avoid name conflicts. If readyTimeoutOverride is positive, it
+// overrides the default ready timeout.
+func CreateWithRetry(name string, providers []string, image, policy string, maxAttempts int, readyTimeoutOverride time.Duration) error {
+	timeout := effectiveReadyTimeout(readyTimeoutOverride)
+
+	var lastErr error
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		lastErr = createOnce(name, providers, image, policy, timeout)
+		if lastErr == nil {
+			return nil
+		}
+
+		// Clean up failed sandbox before retry.
+		_ = Delete(name)
+
+		if attempt < maxAttempts {
+			backoff := retryInitialBackoff * time.Duration(1<<uint(attempt-1))
+			if backoff > retryMaxBackoff {
+				backoff = retryMaxBackoff
+			}
+			fmt.Fprintf(os.Stderr, "  Sandbox creation attempt %d/%d failed, retrying in %s...\n", attempt, maxAttempts, backoff)
+			time.Sleep(backoff)
+		}
+	}
+	return lastErr
+}
+
+// createOnce creates a persistent OpenShell sandbox and waits for it to be
+// ready. If providers are given, they are passed as --provider flags. If image
+// is non-empty, it is passed as --from to start the sandbox from a container
+// image. If policy is non-empty, it is applied at creation time via --policy.
+func createOnce(name string, providers []string, image, policy string, timeout time.Duration) error {
+	ctxTimeout := timeout + 10*time.Second
+	ctx, cancel := context.WithTimeout(context.Background(), ctxTimeout)
 	defer cancel()
 
 	args := []string{
@@ -189,7 +244,7 @@ func Create(name string, providers []string, image, policy string) error {
 	}
 
 	// Wait for sandbox to be fully ready (image pull can take a while).
-	deadline := time.Now().Add(readyTimeout)
+	deadline := time.Now().Add(timeout)
 	var lastOutput, lastStderr string
 	for time.Now().Before(deadline) {
 		check := exec.Command("openshell", "sandbox", "get", name)
@@ -212,7 +267,7 @@ func Create(name string, providers []string, image, policy string) error {
 	containerLogs := collectPodmanLogs(name)
 
 	return fmt.Errorf("sandbox %q not ready after %s\nstdout: %s\nstderr: %s\nsupervisor logs: %s\ngateway logs: %s\ncontainer logs: %s",
-		name, readyTimeout, lastOutput, lastStderr, supervisorLogs, gatewayLogs, containerLogs)
+		name, timeout, lastOutput, lastStderr, supervisorLogs, gatewayLogs, containerLogs)
 }
 
 // Delete deletes a sandbox, returning any error for the caller to log.

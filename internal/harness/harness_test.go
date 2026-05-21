@@ -490,6 +490,37 @@ func TestValidate_NegativeTimeout(t *testing.T) {
 	assert.Contains(t, err.Error(), "timeout_minutes must be non-negative")
 }
 
+func TestValidate_NegativeSandboxTimeout(t *testing.T) {
+	h := &Harness{Agent: "agents/test.md", SandboxTimeoutSeconds: -1}
+	err := h.Validate()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "sandbox_timeout_seconds must be non-negative")
+}
+
+func TestValidate_ZeroSandboxTimeout(t *testing.T) {
+	h := &Harness{Agent: "agents/test.md", SandboxTimeoutSeconds: 0}
+	require.NoError(t, h.Validate())
+}
+
+func TestValidate_PositiveSandboxTimeout(t *testing.T) {
+	h := &Harness{Agent: "agents/test.md", SandboxTimeoutSeconds: 180}
+	require.NoError(t, h.Validate())
+}
+
+func TestLoad_SandboxTimeoutField(t *testing.T) {
+	content := `
+agent: agents/test.md
+sandbox_timeout_seconds: 180
+`
+	dir := t.TempDir()
+	path := filepath.Join(dir, "test.yaml")
+	require.NoError(t, os.WriteFile(path, []byte(content), 0o644))
+
+	h, err := Load(path)
+	require.NoError(t, err)
+	assert.Equal(t, 180, h.SandboxTimeoutSeconds)
+}
+
 func TestLoad_ModelField(t *testing.T) {
 	content := `
 agent: agents/test.md

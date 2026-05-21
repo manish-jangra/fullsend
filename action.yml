@@ -236,6 +236,13 @@ runs:
         openshell gateway add http://127.0.0.1:8080 --local --name local
         openshell gateway select local
 
+    - name: Pre-pull sandbox image
+      shell: bash
+      run: |
+        IMAGE="${FULLSEND_SANDBOX_IMAGE:-ghcr.io/fullsend-ai/fullsend-code:latest}"
+        echo "Pre-pulling sandbox image: ${IMAGE}"
+        podman pull "${IMAGE}" || echo "::warning::Image pre-pull failed; sandbox create will pull on demand"
+
     - name: Install validation dependencies
       shell: bash
       run: pip install --quiet "jsonschema>=4.18.0"

@@ -247,7 +247,8 @@ func runAgent(agentName, fullsendDir, outputBase, targetRepo, fullsendBinary str
 	createStart := time.Now()
 	printer.StepStart("Creating sandbox: " + sandboxName)
 
-	if err := sandbox.Create(sandboxName, h.Providers, h.Image, h.Policy); err != nil {
+	readyTimeout := time.Duration(h.SandboxTimeoutSeconds) * time.Second
+	if err := sandbox.CreateWithRetry(sandboxName, h.Providers, h.Image, h.Policy, 3, readyTimeout); err != nil {
 		printer.StepFail("Failed to create sandbox")
 		return fmt.Errorf("creating sandbox: %w", err)
 	}
