@@ -308,6 +308,42 @@ fullsend run retro \
   --env-file /tmp/fullsend.env
 ```
 
+## Running customized agents
+
+In CI, the reusable workflows automatically overlay customized files from `customized/` (org-level) and `.fullsend/customized/` (per-repo) onto the base config before running the agent. The `fullsend run` CLI does not perform this overlay — it reads from `--fullsend-dir` as-is.
+
+To run customized agents locally, merge the overlays into a working copy of the config directory before invoking `fullsend run`:
+
+```bash
+# Start with a fresh copy of the org config
+cp -r /tmp/fullsend-dot /tmp/fullsend-merged
+
+# Apply org-level customizations (from the .fullsend config repo)
+for dir in agents skills schemas harness plugins policies scripts env; do
+  if [ -d "/tmp/fullsend-merged/customized/${dir}" ]; then
+    cp -r "/tmp/fullsend-merged/customized/${dir}/." "/tmp/fullsend-merged/${dir}/"
+  fi
+done
+
+# Apply per-repo customizations (from the target repo)
+TARGET_REPO=/path/to/repo
+for dir in agents skills schemas harness plugins policies scripts env; do
+  if [ -d "${TARGET_REPO}/.fullsend/customized/${dir}" ]; then
+    cp -r "${TARGET_REPO}/.fullsend/customized/${dir}/." "/tmp/fullsend-merged/${dir}/"
+  fi
+done
+
+# Run with the merged config
+fullsend run <agent> \
+  --fullsend-dir /tmp/fullsend-merged \
+  --target-repo /path/to/repo \
+  --env-file /tmp/fullsend.env
+```
+
+This replicates the three-tier resolution order: upstream defaults < org customizations < per-repo customizations. See [Customizing agents](customizing-agents.md) for details on the layered content model.
+
+> **Custom agent names** require a matching harness YAML. If you add a custom agent definition (e.g. `customized/agents/my-agent.md`), you also need a `customized/harness/my-agent.yaml` that references it — otherwise `fullsend run my-agent` will fail with "harness not found".
+
 ## Testing without side effects
 
 To run agent inference without the post-script (which posts PR comments, pushes branches, or creates PRs), use `--no-post-script`:
