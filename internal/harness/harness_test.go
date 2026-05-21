@@ -238,6 +238,15 @@ func TestValidateRunnerEnv_LiteralValue(t *testing.T) {
 	require.NoError(t, h.ValidateRunnerEnv())
 }
 
+func TestValidateRunnerEnv_EmptyVarAllowed(t *testing.T) {
+	t.Setenv("EMPTY_ALLOWED_VAR", "")
+	h := &Harness{
+		Agent:     "test.md",
+		RunnerEnv: map[string]string{"KEY": "${EMPTY_ALLOWED_VAR}"},
+	}
+	require.NoError(t, h.ValidateRunnerEnv())
+}
+
 // --- Security config tests ---
 
 func TestSecurityEnabled_Default(t *testing.T) {

@@ -131,19 +131,18 @@ runs:
 
     - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
 
+    - name: Set OpenShell version
+      shell: bash
+      run: echo "OPENSHELL_VERSION=0.0.38" >> "${GITHUB_ENV}"
+
     - name: Install OpenShell CLI
       shell: bash
-      env:
-        OPENSHELL_VERSION: "0.0.38"
       run: |
         uv tool install openshell==${OPENSHELL_VERSION}
         openshell --version
 
     - name: Download openshell-gateway
       shell: bash
-      env:
-        OPENSHELL_VERSION: "0.0.38"
-        RUNNER_ARCH: ${{ runner.arch }}
       run: |
         set -euo pipefail
 
@@ -198,7 +197,7 @@ runs:
           done
           [ -S "${SOCKET_PATH}" ] || { echo "::error::Podman socket not ready"; exit 1; }
         fi
-        echo "OPENSHELL_PODMAN_SOCKET=${SOCKET_PATH}" >> "${GITHUB_ENV}"
+        echo "Podman API service ready at ${SOCKET_PATH}"
 
     - name: Start openshell-gateway
       shell: bash
@@ -208,7 +207,7 @@ runs:
         GATEWAY_LOG="${GITHUB_WORKSPACE}/output/openshell-gateway.log"
         mkdir -p "${GITHUB_WORKSPACE}/output"
 
-        export OPENSHELL_SSH_HANDSHAKE_SECRET="ci-$(python3 -c 'import secrets; print(secrets.token_hex(16))')"
+        export OPENSHELL_SSH_HANDSHAKE_SECRET="ci-$(openssl rand -hex 16)"
         echo "::add-mask::${OPENSHELL_SSH_HANDSHAKE_SECRET}"
         # Version-tagged images start at 0.0.41; for 0.0.38 use the release commit SHA.
         # TODO: pass via --podman-supervisor-image flag when one exists (Docker driver has --docker-supervisor-image).
@@ -226,7 +225,13 @@ runs:
           curl -sf http://127.0.0.1:8081/healthz >/dev/null 2>&1 && break
           sleep 2
         done
-        curl -sf http://127.0.0.1:8081/healthz >/dev/null 2>&1 || { echo "::error::Gateway health check failed"; exit 1; }
+        curl -sf http://127.0.0.1:8081/healthz >/dev/null 2>&1 || {
+          echo "::error::Gateway health check failed after 60s"
+          echo "::group::Gateway logs"
+          cat "${GATEWAY_LOG}" 2>/dev/null || echo "(no log file)"
+          echo "::endgroup::"
+          exit 1
+        }
 
         openshell gateway add http://127.0.0.1:8080 --local --name local
         openshell gateway select local

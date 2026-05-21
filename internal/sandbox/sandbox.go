@@ -448,6 +448,12 @@ func collectPodmanLogs(sandboxName string) string {
 		logCmd := exec.CommandContext(ctx, "podman", "logs", "--tail", podmanLogTailLines, cname)
 		logOut, logErr := logCmd.CombinedOutput()
 		if logErr != nil {
+			chunk := fmt.Sprintf("=== %s === (log collection failed: %v)\n", cname, logErr)
+			if b.Len()+len(chunk) > maxContainerLogs {
+				b.WriteString("... (truncated)\n")
+				break
+			}
+			b.WriteString(chunk)
 			continue
 		}
 		chunk := fmt.Sprintf("=== %s ===\n%s\n", cname, string(logOut))
