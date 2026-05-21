@@ -214,7 +214,7 @@ runs:
         export OPENSHELL_SUPERVISOR_IMAGE="ghcr.io/nvidia/openshell/supervisor:dfd47683e7da4f1a4a8fa5d77f92d3696e6a41f9"
 
         "${RUNNER_TEMP}/fullsend/openshell-gateway" \
-          --bind-address 127.0.0.1 \
+          --bind-address 0.0.0.0 \
           --health-port 8081 \
           --drivers podman \
           --disable-tls \
