@@ -333,12 +333,12 @@ When a platform operator has pre-provisioned shared public GitHub Apps and a tok
 - **Org admin approval** to install the shared GitHub Apps on your repository
 - **GCP project** with the [Agent Platform API](https://console.cloud.google.com/apis/library/aiplatform.googleapis.com) enabled for inference
 - **Platform mint details** — obtain from your platform operator:
-  - Mint URL (for OIDC token exchange)
+  - Mint URL (for OIDC token exchange; the assisted path discovers this automatically, but providing it explicitly is recommended)
   - Mint GCP project ID and region (for app discovery and validation via GCP APIs)
 - **Platform operator coordination** — the following must be in place before installation (the assisted path handles these automatically if you have IAM access to the platform project; required manually for the `--skip-mint-check` path):
   - Your organization is registered in the mint's `ALLOWED_ORGS` configuration
   - The mint has the necessary GitHub App PEMs stored in Secret Manager
-  - Mint-side Workload Identity Federation (WIF) is configured to route tokens for your organization
+  - Mint-side Workload Identity Federation (WIF) is configured to accept OIDC tokens from your organization's repositories
 
 **Recommended: Assisted installation**
 
@@ -378,7 +378,7 @@ fullsend admin install "$ORG_NAME/$REPO_NAME" \
 This requires the platform operator to have completed the following before you run the installer:
 - The shared GitHub Apps are already installed on your repository
 - Your organization is registered in the mint's `ALLOWED_ORGS`
-- WIF is configured to accept tokens from your organization
+- Mint-side WIF is configured to accept tokens from your organization
 - All PEMs are stored in Secret Manager
 
 The installer skips all app discovery, mint validation, and mint-related GCP provisioning — it only generates workflow files and sets repository variables and secrets. WIF infrastructure is still auto-provisioned in the inference project; pass `--inference-wif-provider` to skip this as well if the platform operator provides a pre-existing WIF provider.
