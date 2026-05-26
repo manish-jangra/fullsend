@@ -1175,12 +1175,14 @@ var RemoteResourcePolicy = ScanPolicy{
 
 ### 8. Audit Logging
 
-**File:** `internal/audit/fetch_log.go` (new)
+**File:** `internal/fetch/audit.go`
 
-All fetches are logged to a structured log:
+All fetches are logged to a structured JSONL log. The caller provides the log
+path directly (better separation of concerns than env-var resolution inside the
+logger). File permissions use `0o600` to match `security.AppendFinding`.
 
 ```go
-package audit
+package fetch
 
 import (
     "encoding/json"
@@ -1190,44 +1192,34 @@ import (
     "time"
 )
 
-type FetchLog struct {
-    TraceID    string    `json:"trace_id"`
-    FetchTime  time.Time `json:"fetch_time"`
-    URL        string    `json:"url"`
-    SHA256     string    `json:"sha256"`
-    FetchType  string    `json:"fetch_type"`  // "static" or "runtime"
-    AllowedBy  string    `json:"allowed_by"`  // which allowed_remote_resources entry matched
+type FetchAuditEntry struct {
+    TraceID   string    `json:"trace_id"`
+    FetchTime time.Time `json:"fetch_time"`
+    URL       string    `json:"url"`
+    SHA256    string    `json:"sha256"`
+    FetchType string    `json:"fetch_type"`
+    AllowedBy string    `json:"allowed_by"`
+    CacheHit  bool      `json:"cache_hit"`
 }
 
-// LogFetch appends a fetch record to the audit log.
-// Note: Audit logs are kept in user home directory for persistence across workspaces.
-// This is configurable via FULLSEND_AUDIT_DIR environment variable.
-func LogFetch(log FetchLog) error {
-    logDir := os.Getenv("FULLSEND_AUDIT_DIR")
-    if logDir == "" {
-        home, err := os.UserHomeDir()
-        if err != nil {
-            return fmt.Errorf("getting home directory for audit logs: %w", err)
-        }
-        logDir = filepath.Join(home, ".cache", "fullsend", "audit")
-    }
-    if err := os.MkdirAll(logDir, 0755); err != nil {
+func AppendFetchAudit(logPath string, entry FetchAuditEntry) error {
+    if err := os.MkdirAll(filepath.Dir(logPath), 0o755); err != nil {
         return fmt.Errorf("creating audit log directory: %w", err)
     }
-
-    logPath := filepath.Join(logDir, "fetches.jsonl")
-    f, err := os.OpenFile(logPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+    f, err := os.OpenFile(logPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
     if err != nil {
-        return err
+        return fmt.Errorf("opening audit log: %w", err)
     }
     defer f.Close()
 
-    data, err := json.Marshal(log)
+    data, err := json.Marshal(entry)
     if err != nil {
-        return fmt.Errorf("marshaling fetch log: %w", err)
+        return fmt.Errorf("marshaling audit entry: %w", err)
     }
-    _, err = f.Write(append(data, '\n'))
-    return err
+    if _, err := fmt.Fprintf(f, "%s\n", data); err != nil {
+        return fmt.Errorf("writing audit entry: %w", err)
+    }
+    return nil
 }
 ```
 
