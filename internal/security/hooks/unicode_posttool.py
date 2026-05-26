@@ -40,7 +40,8 @@ _CHECKS: list[tuple[str, str, re.Pattern]] = [
         "zero_width",
         "high",
         re.compile(
-            "[\u00ad\u034f\u180e\u200b-\u200f\ufeff\u2060-\u2064\u206a-\u206f\ufff9-\ufffb]+"
+            "[\u00ad\u034f\u061c\u0600-\u0605\u070f\u0890-\u0891\u08e2\u180e"
+            "\u200b-\u200f\u2028\u2029\u2060-\u2064\u206a-\u206f\ufeff\ufff9-\ufffb]+"
         ),
     ),
     (
@@ -59,13 +60,13 @@ _CHECKS: list[tuple[str, str, re.Pattern]] = [
         "medium",
         re.compile(r"\x1b\[[\x30-\x3f]*[\x20-\x2f]*[\x40-\x7e]"),
     ),
-    # OSC: terminal hyperlinks, window title injection.
+    # ST-terminated: OSC (ESC ]), DCS (ESC P), APC (ESC _), PM (ESC ^).
     # Uses negated class [^\x1b\x07]* instead of .*? to avoid O(n^2)
-    # backtracking on dense unterminated ESC] sequences.
+    # backtracking on dense unterminated sequences.
     (
         "osc_escape",
         "medium",
-        re.compile(r"\x1b\][^\x1b\x07]*(?:\x1b\\|\x07)"),
+        re.compile(r"\x1b[\]P_^][^\x1b\x07]*(?:\x1b\\|\x07)"),
     ),
     (
         "null_byte",

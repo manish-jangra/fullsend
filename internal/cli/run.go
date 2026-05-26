@@ -1446,12 +1446,8 @@ func scanOutputFiles(outputDir, traceID string, printer *ui.Printer) error {
 						Finding:   f,
 					})
 			}
+			// Sanitized may be empty when all content was invisible characters.
 			out := result.Sanitized
-			// Only fall back when the pipeline made no changes; empty Sanitized with
-			// findings means content was fully stripped (e.g. all invisible chars).
-			if out == "" && len(result.Findings) == 0 {
-				out = text
-			}
 			if writeErr := os.WriteFile(path, []byte(out), 0o644); writeErr != nil {
 				printer.StepWarn(fmt.Sprintf("Could not write sanitized %s: %v", relPath, writeErr))
 			}

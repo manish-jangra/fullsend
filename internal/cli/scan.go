@@ -195,11 +195,8 @@ Usage in a workflow step:
 				for _, f := range result.Findings {
 					printer.StepWarn(fmt.Sprintf("  %s: %s", f.Name, f.Detail))
 				}
-				out := result.Sanitized
-				if out == "" && len(result.Findings) == 0 {
-					out = text
-				}
-				fmt.Fprint(os.Stdout, out)
+				// Sanitized may be empty when all content was invisible characters.
+				fmt.Fprint(os.Stdout, result.Sanitized)
 			} else {
 				printer.StepDone("No secrets found in output")
 				fmt.Fprint(os.Stdout, text)

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"unicode"
 	"unicode/utf8"
 
 	"golang.org/x/text/unicode/norm"
@@ -24,7 +25,7 @@ func (u *UnicodeNormalizer) Name() string { return "unicode_normalizer" }
 var (
 	// Zero-width and invisible format characters (aligned with unicode_posttool.py).
 	reZeroWidth = regexp.MustCompile(
-		"[\u00AD\u034F\u180E\u200B-\u200F\u2060-\u2064\u206A-\u206F\uFEFF\uFFF9-\uFFFB]+",
+		"[\u00AD\u034F\u061C\u0600-\u0605\u070F\u0890-\u0891\u08E2\u180E\u200B-\u200F\u2028\u2029\u2060-\u2064\u206A-\u206F\uFEFF\uFFF9-\uFFFB]+",
 	)
 
 	// Bidirectional override characters.
@@ -35,8 +36,8 @@ var (
 	// ANSI CSI escape sequences (ECMA-48 compliant).
 	reANSI = regexp.MustCompile(`\x1b\[[\x30-\x3f]*[\x20-\x2f]*[\x40-\x7e]`)
 
-	// OSC escape sequences (terminal hyperlinks, title injection).
-	reOSC = regexp.MustCompile(`\x1b\][^\x1b\x07]*(?:\x1b\\|\x07)`)
+	// ST-terminated escape sequences: OSC (ESC ]), DCS (ESC P), APC (ESC _), PM (ESC ^).
+	reSTTerminated = regexp.MustCompile(`\x1b[\]P_^][^\x1b\x07]*(?:\x1b\\|\x07)`)
 
 	// Null bytes.
 	reNull = regexp.MustCompile("\x00+")
@@ -52,12 +53,12 @@ func stripTerminalEscapes(text string) (string, int, int) {
 		ansiCount++
 		return ""
 	})
-	oscCount := 0
-	current = reOSC.ReplaceAllStringFunc(current, func(string) string {
-		oscCount++
+	stCount := 0
+	current = reSTTerminated.ReplaceAllStringFunc(current, func(string) string {
+		stCount++
 		return ""
 	})
-	return current, ansiCount, oscCount
+	return current, ansiCount, stCount
 }
 
 func (u *UnicodeNormalizer) Scan(text string) ScanResult {
@@ -80,8 +81,8 @@ func (u *UnicodeNormalizer) Scan(text string) ScanResult {
 		current = reNull.ReplaceAllString(current, "")
 	}
 
-	// ANSI and OSC escapes
-	if stripped, ansiCount, oscCount := stripTerminalEscapes(current); ansiCount > 0 || oscCount > 0 {
+	// ANSI and ST-terminated escapes (OSC, DCS, APC, PM).
+	if stripped, ansiCount, stCount := stripTerminalEscapes(current); ansiCount > 0 || stCount > 0 {
 		if ansiCount > 0 {
 			findings = append(findings, Finding{
 				Scanner:  "unicode_normalizer",
@@ -90,12 +91,12 @@ func (u *UnicodeNormalizer) Scan(text string) ScanResult {
 				Detail:   fmt.Sprintf("%d ANSI escape sequences removed", ansiCount),
 			})
 		}
-		if oscCount > 0 {
+		if stCount > 0 {
 			findings = append(findings, Finding{
 				Scanner:  "unicode_normalizer",
 				Name:     "osc_escape",
 				Severity: "medium",
-				Detail:   fmt.Sprintf("%d OSC escape sequences removed", oscCount),
+				Detail:   fmt.Sprintf("%d ST-terminated escape sequences removed", stCount),
 			})
 		}
 		current = stripped
@@ -193,6 +194,26 @@ func (u *UnicodeNormalizer) Scan(text string) ScanResult {
 		current = suppVSStripped.String()
 	}
 
+	// Remaining Cf (format) category characters (e.g. U+061C Arabic Letter Mark).
+	var cfStripped strings.Builder
+	cfCount := 0
+	for _, r := range current {
+		if unicode.Is(unicode.Cf, r) {
+			cfCount++
+		} else {
+			cfStripped.WriteRune(r)
+		}
+	}
+	if cfCount > 0 {
+		findings = append(findings, Finding{
+			Scanner:  "unicode_normalizer",
+			Name:     "zero_width",
+			Severity: "high",
+			Detail:   fmt.Sprintf("%d format (Cf) characters removed", cfCount),
+		})
+		current = cfStripped.String()
+	}
+
 	// NFKC normalization (fullwidth -> ASCII, compatibility decomposition)
 	nfkc := norm.NFKC.String(current)
 	if nfkc != current {
@@ -227,7 +248,7 @@ func (u *UnicodeNormalizer) Scan(text string) ScanResult {
 		current = nfkc
 
 		// NFKC can reconstruct escape sequences from fullwidth characters.
-		if stripped, ansiCount, oscCount := stripTerminalEscapes(current); ansiCount > 0 || oscCount > 0 {
+		if stripped, ansiCount, stCount := stripTerminalEscapes(current); ansiCount > 0 || stCount > 0 {
 			if ansiCount > 0 {
 				findings = append(findings, Finding{
 					Scanner:  "unicode_normalizer",
@@ -236,12 +257,12 @@ func (u *UnicodeNormalizer) Scan(text string) ScanResult {
 					Detail:   fmt.Sprintf("%d ANSI escape sequences removed (post-NFKC)", ansiCount),
 				})
 			}
-			if oscCount > 0 {
+			if stCount > 0 {
 				findings = append(findings, Finding{
 					Scanner:  "unicode_normalizer",
 					Name:     "osc_escape",
 					Severity: "medium",
-					Detail:   fmt.Sprintf("%d OSC escape sequences removed (post-NFKC)", oscCount),
+					Detail:   fmt.Sprintf("%d ST-terminated escape sequences removed (post-NFKC)", stCount),
 				})
 			}
 			current = stripped
