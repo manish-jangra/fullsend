@@ -208,6 +208,32 @@ func TestSecretRedactor(t *testing.T) {
 		result := r.Scan("postgres://user:abc@host:5432/db")
 		assert.True(t, result.Safe || !hasFinding(result, "db_connection_password"))
 	})
+
+	t.Run("db password with multiple @ redacted", func(t *testing.T) {
+		result := r.Scan("postgres://user:P@ss@w0rd@host:5432/db")
+		assert.False(t, result.Safe)
+		assert.True(t, hasFinding(result, "db_connection_password"))
+		assert.NotContains(t, result.Sanitized, "P@ss@w0rd")
+	})
+
+	t.Run("postgresql scheme redacted", func(t *testing.T) {
+		result := r.Scan("postgresql://admin:hunter2secret@db:5432/app")
+		assert.False(t, result.Safe)
+		assert.True(t, hasFinding(result, "db_connection_password"))
+		assert.NotContains(t, result.Sanitized, "hunter2secret")
+	})
+
+	t.Run("env var false positive monkey rejected", func(t *testing.T) {
+		result := r.Scan("monkey=abcdefghijklmnop")
+		assert.True(t, result.Safe || !hasFinding(result, "env_assignment"))
+	})
+
+	t.Run("json field substring key redacted", func(t *testing.T) {
+		result := r.Scan(`{"database_password": "my-super-secret-pass-1234"}`)
+		assert.False(t, result.Safe)
+		assert.True(t, hasFinding(result, "json_field"))
+		assert.NotContains(t, result.Sanitized, "my-super-secret-pass-1234")
+	})
 }
 
 func TestSSRFValidator(t *testing.T) {

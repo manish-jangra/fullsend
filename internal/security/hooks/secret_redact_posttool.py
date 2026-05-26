@@ -56,8 +56,8 @@ _STRUCTURAL_PATTERNS: list[tuple[str, re.Pattern]] = [
         "env_secret",
         re.compile(
             r"(?:^|\s)(?:export\s+)?(?:"
-            r"[A-Za-z_]*(?:SECRET|TOKEN|KEY|PASSWORD|PASSWD|CREDENTIAL|API_KEY|APIKEY|AUTH)"
-            r"[A-Za-z_]*)"
+            r"(?:[A-Za-z0-9]+_)*(?:SECRET|TOKEN|KEY|PASSWORD|PASSWD|CREDENTIAL|API_KEY|APIKEY|AUTH)"
+            r"(?:_[A-Za-z0-9]+)*)"
             r"\s*=\s*['\"]?([A-Za-z0-9_.+/=@:%-]{8,})['\"]?",
             re.MULTILINE | re.IGNORECASE,
         ),
@@ -81,7 +81,7 @@ _STRUCTURAL_PATTERNS: list[tuple[str, re.Pattern]] = [
     (
         "db_password",
         re.compile(
-            r"(?:postgres|mysql|mongodb|redis)(?:ql)?://[^:]+:(.{8,}?)@[^@\s/]+",
+            r"(?:postgres|mysql|mongodb|redis)(?:ql)?://[^:]+:(.{4,})@[^@\s/]+",
             re.IGNORECASE,
         ),
     ),
