@@ -700,6 +700,8 @@ func TestPrioritizeWorkflowContent(t *testing.T) {
 	assert.Contains(t, s, "event_payload")
 	assert.Contains(t, s, "FULLSEND_PROJECT_NUMBER")
 	assert.Contains(t, s, "setup-agent-env.sh")
+	assert.Contains(t, s, `cp "${SRC}/.github/scripts/setup-agent-env.sh"`)
+	assert.NotContains(t, s, ".defaults/.github/scripts")
 	assert.Contains(t, s, "agent: prioritize")
 	assert.Contains(t, s, "concurrency:")
 	assert.Contains(t, s, "fullsend-prioritize")
