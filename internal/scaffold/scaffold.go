@@ -54,6 +54,10 @@ func FileMode(path string) string {
 // layeredDirs contain upstream defaults provided at runtime via reusable
 // workflow workspace preparation. The scaffold does not install these —
 // orgs add overrides in customized/<dir>/ instead. See ADR 0035.
+//
+// When adding or removing harness YAML files (default agents), update
+// docs/agents/README.md and add a corresponding docs/agents/<name>.md.
+// The lint-agent-docs pre-commit hook enforces this.
 var layeredDirs = []string{
 	"agents/",
 	"skills/",
