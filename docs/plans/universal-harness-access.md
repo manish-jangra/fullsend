@@ -547,7 +547,7 @@ func (h *Harness) Validate(orgAllowlist []string) error {
 
 ### 2. URL Detection and Classification
 
-**File:** `internal/harness/url.go` (new)
+**File:** `internal/harness/url.go`
 
 ```go
 package harness
@@ -558,60 +558,44 @@ import (
     "strings"
 )
 
-// IsURL returns true if s is a valid HTTPS URL.
-// Only https:// URLs are accepted for remote resources. http:// URLs are rejected
-// to avoid confusion and provide clear error messages.
-// Rejects malformed URLs (empty host, userinfo, etc.)
 func IsURL(s string) bool {
+    if s == "" {
+        return false
+    }
     u, err := url.Parse(s)
     if err != nil || u.Scheme != "https" {
         return false
     }
-    // Reject malformed URLs that url.Parse accepts but shouldn't be allowed:
-    // - Empty host (https:, https://, https:///path)
-    // - Userinfo (e.g., https://user:pass@host/ - credentials in URL)
-    // Note: url.Parse sets u.User for standard userinfo forms (https://user@host/), but may
-    // not catch all edge cases (e.g., https://@host/ on some Go versions). Production
-    // implementation should add strings.Contains(s, "@") check before hostname validation
-    // as belt-and-suspenders defense.
     if u.Host == "" || u.User != nil {
         return false
     }
-    // Validate hostname is non-empty (u.Hostname() returns "" for malformed hosts)
     if u.Hostname() == "" {
+        return false
+    }
+    if strings.Contains(u.Host, "@") {
         return false
     }
     return true
 }
 
-// isAbsPath returns true if s is an absolute file path.
-func isAbsPath(s string) bool {
+func IsAbsPath(s string) bool {
     return filepath.IsAbs(s)
 }
 
-// isRelPath returns true if s is a relative file path.
-func isRelPath(s string) bool {
-    return !IsURL(s) && !isAbsPath(s)
+func IsRelPath(s string) bool {
+    return s != "" && !IsURL(s) && !IsAbsPath(s)
 }
 
-// ParseIntegrityHash extracts the SHA256 hash from a URL fragment.
-// Example: https://example.com/file.md#sha256=abc123... -> "abc123..."
-// Returns an error if the hash is not a valid 64-character lowercase hex string.
-func ParseIntegrityHash(rawURL string) (urlWithoutHash, hash string, hasHash bool) {
-    u, err := url.Parse(rawURL)
-    if err != nil {
+func ParseIntegrityHash(rawURL string) (cleanURL, hash string, hasHash bool) {
+    idx := strings.LastIndex(rawURL, "#")
+    if idx == -1 {
         return rawURL, "", false
     }
-    if u.Fragment == "" {
+    fragment := rawURL[idx+1:]
+    if !strings.HasPrefix(fragment, "sha256=") {
         return rawURL, "", false
     }
-    if !strings.HasPrefix(u.Fragment, "sha256=") {
-        return rawURL, "", false
-    }
-    hash = strings.TrimPrefix(u.Fragment, "sha256=")
-
-    // Validate hash format: must be exactly 64 lowercase hex characters
-    // This prevents path traversal attacks like #sha256=../../etc/shadow
+    hash = strings.ToLower(strings.TrimPrefix(fragment, "sha256="))
     if len(hash) != 64 {
         return rawURL, "", false
     }
@@ -620,11 +604,15 @@ func ParseIntegrityHash(rawURL string) (urlWithoutHash, hash string, hasHash boo
             return rawURL, "", false
         }
     }
-
-    u.Fragment = ""
-    return u.String(), hash, true
+    return rawURL[:idx], hash, true
 }
 ```
+
+Key implementation details vs. original plan:
+- `IsURL` guards against empty string and includes belt-and-suspenders `@` check on `u.Host`
+- `IsRelPath` returns `false` for empty strings to prevent misclassifying missing values
+- `ParseIntegrityHash` normalizes uppercase hex via `strings.ToLower` (SHA-256 hashes are commonly rendered with mixed case)
+- `ParseIntegrityHash` uses `strings.LastIndex` for fragment extraction instead of `url.Parse` to correctly handle non-URL inputs (relative paths)
 
 ### 3. Resource Fetcher with SSRF Protection
 
