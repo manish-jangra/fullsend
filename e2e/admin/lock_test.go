@@ -68,14 +68,11 @@ func TestAcquireOrg_FirstOrgAvailable(t *testing.T) {
 	fake := forge.NewFakeClient()
 	ctx := context.Background()
 
-	// Save and restore the real pool.
-	origPool := orgPool
-	defer func() { orgPool = origPool }()
-	orgPool = []string{"test-org-1", "test-org-2", "test-org-3"}
+	pool := []string{"test-org-1", "test-org-2", "test-org-3"}
 
-	org, err := acquireOrg(ctx, fake, "", "run-1", 5*time.Second, t.Logf)
+	org, err := acquireOrg(ctx, fake, "", "run-1", pool, 5*time.Second, t.Logf)
 	require.NoError(t, err)
-	assert.Contains(t, orgPool, org, "should acquire one of the pool orgs")
+	assert.Contains(t, pool, org, "should acquire one of the pool orgs")
 
 	// Verify the lock is held on the acquired org.
 	content, err := fake.GetFileContent(ctx, org, lockRepo, "README.md")
@@ -87,9 +84,7 @@ func TestAcquireOrg_SkipsLockedOrg(t *testing.T) {
 	fake := forge.NewFakeClient()
 	ctx := context.Background()
 
-	origPool := orgPool
-	defer func() { orgPool = origPool }()
-	orgPool = []string{"test-org-1", "test-org-2", "test-org-3"}
+	pool := []string{"test-org-1", "test-org-2", "test-org-3"}
 
 	// Lock the first org.
 	fake.CreatedRepos = append(fake.CreatedRepos, forge.Repository{
@@ -98,7 +93,7 @@ func TestAcquireOrg_SkipsLockedOrg(t *testing.T) {
 	})
 	fake.FileContents["test-org-1/"+lockRepo+"/README.md"] = []byte("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
 
-	org, err := acquireOrg(ctx, fake, "", "run-2", 5*time.Second, t.Logf)
+	org, err := acquireOrg(ctx, fake, "", "run-2", pool, 5*time.Second, t.Logf)
 	require.NoError(t, err)
 	assert.NotEqual(t, "test-org-1", org, "should skip locked test-org-1")
 	assert.Contains(t, []string{"test-org-2", "test-org-3"}, org, "should acquire an unlocked org")
@@ -108,13 +103,11 @@ func TestAcquireOrg_AllLockedTimesOut(t *testing.T) {
 	fake := forge.NewFakeClient()
 	ctx := context.Background()
 
-	origPool := orgPool
-	defer func() { orgPool = origPool }()
-	orgPool = []string{"test-org-1", "test-org-2"}
+	pool := []string{"test-org-1", "test-org-2"}
 
 	// Lock all orgs by pre-populating directly (same-name repos across
 	// orgs collide in the fake client's duplicate check).
-	for _, org := range orgPool {
+	for _, org := range pool {
 		fake.CreatedRepos = append(fake.CreatedRepos, forge.Repository{
 			Name:     lockRepo,
 			FullName: org + "/" + lockRepo,
@@ -123,7 +116,7 @@ func TestAcquireOrg_AllLockedTimesOut(t *testing.T) {
 	}
 
 	// Use a very short timeout so the test doesn't block.
-	_, err := acquireOrg(ctx, fake, "", "run-3", 1*time.Second, t.Logf)
+	_, err := acquireOrg(ctx, fake, "", "run-3", pool, 1*time.Second, t.Logf)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "could not acquire any org")
 }
@@ -132,15 +125,13 @@ func TestAcquireOrg_PropagatesErrors(t *testing.T) {
 	fake := forge.NewFakeClient()
 	ctx := context.Background()
 
-	origPool := orgPool
-	defer func() { orgPool = origPool }()
-	orgPool = []string{"test-org-1"}
+	pool := []string{"test-org-1"}
 
 	// Inject a non-"already exists" error for CreateRepo.
 	fake.Errors = map[string]error{"CreateRepo": fmt.Errorf("rate limited")}
 
 	// The error from tryCreateLock should be logged and the function
 	// should fall through to the timeout path.
-	_, err := acquireOrg(ctx, fake, "", "run-4", 1*time.Second, t.Logf)
+	_, err := acquireOrg(ctx, fake, "", "run-4", pool, 1*time.Second, t.Logf)
 	require.Error(t, err)
 }

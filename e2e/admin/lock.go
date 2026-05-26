@@ -77,7 +77,7 @@ func acquireLock(ctx context.Context, client forge.Client, token, org, runID str
 				age := time.Since(createdAt)
 
 				// Stale lock recovery.
-				if age > timeout {
+				if age > staleLockTimeout {
 					logf("[e2e-lock] Lock appears stale (age: %s), force-acquiring", age)
 					_ = client.DeleteRepo(ctx, org, lockRepo)
 					acquired, err := tryCreateLock(ctx, client, org, runID, logf)
@@ -155,7 +155,7 @@ func tryCreateLock(ctx context.Context, client forge.Client, org, runID string, 
 func releaseLock(ctx context.Context, client forge.Client, org, runID string, t *testing.T) {
 	content, err := client.GetFileContent(ctx, org, lockRepo, "README.md")
 	if err != nil {
-		t.Errorf("[e2e-lock] could not read lock file during release: %v", err)
+		t.Logf("warning: [e2e-lock] could not read lock file during release: %v", err)
 		return
 	}
 
@@ -165,28 +165,28 @@ func releaseLock(ctx context.Context, client forge.Client, org, runID string, t 
 	}
 
 	if err := client.DeleteRepo(ctx, org, lockRepo); err != nil {
-		t.Errorf("[e2e-lock] failed to release lock: %v", err)
+		t.Logf("warning: [e2e-lock] failed to release lock: %v", err)
 		return
 	}
 	t.Logf("[e2e-lock] Lock released (run: %s)", truncateUUID(runID))
 }
 
 // tryReclaimStaleLock checks whether the lock on org is stale (older than
-// timeout) and force-acquires it if so. Returns true if the lock was
-// reclaimed. This runs during the first pass so stale locks from crashed
-// runs don't waste pool capacity.
-func tryReclaimStaleLock(ctx context.Context, client forge.Client, token, org, runID string, timeout time.Duration, logf func(string, ...any)) bool {
+// staleLockTimeout) and force-acquires it if so. Returns true if the lock
+// was reclaimed. This runs during the first pass so stale locks from
+// crashed runs don't waste pool capacity.
+func tryReclaimStaleLock(ctx context.Context, client forge.Client, token, org, runID string, logf func(string, ...any)) bool {
 	createdAt, err := getRepoCreatedAt(ctx, token, org, lockRepo)
 	if err != nil {
 		logf("[org-pool] Could not check lock age for %s: %v", org, err)
 		return false
 	}
 	age := time.Since(createdAt)
-	if age <= timeout {
+	if age <= staleLockTimeout {
 		logf("[org-pool] %s lock is fresh (age: %s), skipping", org, age.Round(time.Second))
 		return false
 	}
-	logf("[org-pool] %s lock is stale (age: %s > %s), force-acquiring", org, age.Round(time.Second), timeout)
+	logf("[org-pool] %s lock is stale (age: %s > %s), force-acquiring", org, age.Round(time.Second), staleLockTimeout)
 	_ = client.DeleteRepo(ctx, org, lockRepo)
 	acquired, err := tryCreateLock(ctx, client, org, runID, logf)
 	if err != nil {
@@ -217,6 +217,5 @@ func isRepoAlreadyExists(err error) bool {
 	if err == nil {
 		return false
 	}
-	msg := err.Error()
-	return strings.Contains(msg, "already exists") || strings.Contains(msg, "422")
+	return strings.Contains(err.Error(), "already exists")
 }

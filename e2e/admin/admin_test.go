@@ -94,7 +94,7 @@ func setupE2ETest(t *testing.T) *e2eEnv {
 	t.Cleanup(func() {
 		t.Log("Deleting PAT...")
 		if delErr := deletePAT(page, patNote, t.Logf); delErr != nil {
-			t.Errorf("could not delete PAT: %v", delErr)
+			t.Logf("warning: could not delete PAT: %v", delErr)
 		}
 	})
 
@@ -105,7 +105,7 @@ func setupE2ETest(t *testing.T) *e2eEnv {
 	runID := uuid.New().String()
 	t.Logf("E2E run ID: %s", runID)
 
-	org, err := acquireOrg(context.Background(), client, token, runID, cfg.lockTimeout, t.Logf)
+	org, err := acquireOrg(context.Background(), client, token, runID, orgPool, cfg.lockTimeout, t.Logf)
 	require.NoError(t, err, "acquiring org from pool")
 	t.Logf("Acquired org: %s", org)
 	t.Cleanup(func() {

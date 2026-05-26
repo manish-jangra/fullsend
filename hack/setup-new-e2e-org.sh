@@ -176,9 +176,9 @@ for role in "${ROLES[@]}"; do
 done
 
 # --- 5. check mint enrollment ---
-MINT_PROJECT="${MINT_PROJECT:-it-gcp-konflux-dev-fullsend}"
+MINT_PROJECT="${MINT_PROJECT:?MINT_PROJECT must be set}"
 MINT_REGION="${MINT_REGION:-us-central1}"
-MINT_FUNCTION="${MINT_FUNCTION:-fullsend-mint}"
+MINT_FUNCTION="${MINT_FUNCTION:?MINT_FUNCTION must be set}"
 
 echo
 echo "==> Checking mint enrollment (project: ${MINT_PROJECT}, region: ${MINT_REGION})..."

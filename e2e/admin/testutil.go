@@ -29,7 +29,7 @@ const (
 
 	// defaultLockTimeout is how long to wait for the lock before giving up.
 	// This is only used as the fallback if ALL orgs are locked.
-	defaultLockTimeout = 20 * time.Minute
+	defaultLockTimeout = 10 * time.Minute
 
 	// lockPollInterval is how often to poll while waiting for the lock.
 	lockPollInterval = 30 * time.Second
@@ -37,6 +37,11 @@ const (
 	// freshLockThreshold is the age below which a lock is considered
 	// "just acquired" and we reset the wait timer.
 	freshLockThreshold = 1 * time.Minute
+
+	// staleLockTimeout is the age above which a lock from a crashed run
+	// is considered stale and eligible for force-reclaim. Independent of
+	// defaultLockTimeout so stale locks are recovered faster.
+	staleLockTimeout = 5 * time.Minute
 )
 
 // orgPool is the set of GitHub orgs available for parallel e2e test runs.
@@ -50,19 +55,19 @@ var orgPool = []string{
 	// "halfsend-06", // not yet enrolled in mint
 }
 
-// acquireOrg scans the org pool for an unlocked org and acquires its lock.
-// If all orgs are locked, it falls back to waiting on each org in sequence,
-// bounded by a single shared deadline (not per-org). Returns the org name.
-func acquireOrg(ctx context.Context, client forge.Client, token, runID string, timeout time.Duration, logf func(string, ...any)) (string, error) {
+// acquireOrg scans the pool for an unlocked org and acquires its lock.
+// If all orgs are locked, it round-robin polls until one frees up or the
+// timeout expires. Returns the org name.
+func acquireOrg(ctx context.Context, client forge.Client, token, runID string, pool []string, timeout time.Duration, logf func(string, ...any)) (string, error) {
 	// Shuffle the pool so concurrent runners don't all compete for the
 	// same first org (thundering herd).
-	shuffled := make([]string, len(orgPool))
-	copy(shuffled, orgPool)
+	shuffled := make([]string, len(pool))
+	copy(shuffled, pool)
 	rand.Shuffle(len(shuffled), func(i, j int) { shuffled[i], shuffled[j] = shuffled[j], shuffled[i] })
 
 	// First pass: try each org without waiting. If a lock exists but is
-	// stale (older than timeout), force-acquire it so we don't waste pool
-	// capacity on crashed runs.
+	// stale (older than staleLockTimeout), force-acquire it so we don't
+	// waste pool capacity on crashed runs.
 	for _, org := range shuffled {
 		logf("[org-pool] Trying to acquire %s...", org)
 		acquired, err := tryCreateLock(ctx, client, org, runID, logf)
@@ -76,37 +81,42 @@ func acquireOrg(ctx context.Context, client forge.Client, token, runID string, t
 		}
 		// Lock exists — check if it's stale and force-acquire if so.
 		if token != "" {
-			if reclaimed := tryReclaimStaleLock(ctx, client, token, org, runID, timeout, logf); reclaimed {
+			if reclaimed := tryReclaimStaleLock(ctx, client, token, org, runID, logf); reclaimed {
 				return org, nil
 			}
 		}
 		logf("[org-pool] %s is locked, trying next", org)
 	}
 
-	// All orgs are locked. Fall back to waiting with a shared deadline
-	// across all orgs so total wait is bounded by timeout, not N*timeout.
-	logf("[org-pool] All %d orgs are locked, waiting with total timeout %s", len(orgPool), timeout)
-	deadlineCtx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
-	var lastErr error
-	for _, org := range shuffled {
-		if deadlineCtx.Err() != nil {
+	// All orgs are locked. Round-robin poll until one frees up or
+	// the shared deadline expires.
+	logf("[org-pool] All %d orgs are locked, polling with timeout %s", len(pool), timeout)
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
 			break
 		}
-		// Pass remaining context time, not the full timeout, so that
-		// each org only uses its fair share of the shared deadline.
-		err := acquireLock(deadlineCtx, client, token, org, runID, timeout, logf)
-		if err == nil {
-			return org, nil
+		wait := min(lockPollInterval, remaining)
+		select {
+		case <-time.After(wait):
+		case <-ctx.Done():
+			return "", ctx.Err()
 		}
-		lastErr = err
-		logf("[org-pool] Could not acquire %s: %v", org, err)
+		for _, org := range shuffled {
+			acquired, err := tryCreateLock(ctx, client, org, runID, logf)
+			if err != nil {
+				logf("[org-pool] Error trying %s: %v", org, err)
+				continue
+			}
+			if acquired {
+				logf("[org-pool] Acquired %s", org)
+				return org, nil
+			}
+		}
 	}
 
-	if lastErr != nil {
-		return "", fmt.Errorf("could not acquire any org from pool after %s (tried %d orgs): %w", timeout, len(orgPool), lastErr)
-	}
-	return "", fmt.Errorf("could not acquire any org from pool after %s (tried %d orgs)", timeout, len(orgPool))
+	return "", fmt.Errorf("could not acquire any org from pool after %s (tried %d orgs)", timeout, len(pool))
 }
 
 // defaultRoles is the standard set of agent roles.
