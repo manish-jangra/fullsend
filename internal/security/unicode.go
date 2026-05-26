@@ -47,19 +47,16 @@ var (
 
 // stripTerminalEscapes removes ANSI CSI and OSC sequences from text.
 func stripTerminalEscapes(text string) (string, int, int) {
-	current := text
 	ansiCount := 0
+	current := reANSI.ReplaceAllStringFunc(text, func(string) string {
+		ansiCount++
+		return ""
+	})
 	oscCount := 0
-
-	if matches := reANSI.FindAllString(current, -1); len(matches) > 0 {
-		ansiCount = len(matches)
-		current = reANSI.ReplaceAllString(current, "")
-	}
-	if matches := reOSC.FindAllString(current, -1); len(matches) > 0 {
-		oscCount = len(matches)
-		current = reOSC.ReplaceAllString(current, "")
-	}
-
+	current = reOSC.ReplaceAllStringFunc(current, func(string) string {
+		oscCount++
+		return ""
+	})
 	return current, ansiCount, oscCount
 }
 

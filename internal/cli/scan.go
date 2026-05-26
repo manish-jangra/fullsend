@@ -196,7 +196,7 @@ Usage in a workflow step:
 					printer.StepWarn(fmt.Sprintf("  %s: %s", f.Name, f.Detail))
 				}
 				out := result.Sanitized
-				if out == "" {
+				if out == "" && len(result.Findings) == 0 {
 					out = text
 				}
 				fmt.Fprint(os.Stdout, out)

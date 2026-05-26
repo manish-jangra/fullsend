@@ -1447,7 +1447,9 @@ func scanOutputFiles(outputDir, traceID string, printer *ui.Printer) error {
 					})
 			}
 			out := result.Sanitized
-			if out == "" {
+			// Only fall back when the pipeline made no changes; empty Sanitized with
+			// findings means content was fully stripped (e.g. all invisible chars).
+			if out == "" && len(result.Findings) == 0 {
 				out = text
 			}
 			if writeErr := os.WriteFile(path, []byte(out), 0o644); writeErr != nil {
