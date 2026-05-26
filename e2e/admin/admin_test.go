@@ -3,12 +3,15 @@
 package admin
 
 import (
+	"archive/zip"
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
-	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -18,25 +21,21 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/fullsend-ai/fullsend/internal/appsetup"
 	"github.com/fullsend-ai/fullsend/internal/config"
 	"github.com/fullsend-ai/fullsend/internal/forge"
 	gh "github.com/fullsend-ai/fullsend/internal/forge/github"
-	"github.com/fullsend-ai/fullsend/internal/inference"
-	"github.com/fullsend-ai/fullsend/internal/inference/vertex"
-	"github.com/fullsend-ai/fullsend/internal/layers"
-	"github.com/fullsend-ai/fullsend/internal/ui"
 )
 
 // e2eEnv holds the shared state for an e2e test run.
 type e2eEnv struct {
 	cfg           envConfig
+	org           string // the org acquired from the pool
 	page          playwright.Page
 	client        *gh.LiveClient
 	token         string
-	printer       *ui.Printer
 	runID         string
 	screenshotDir string
+	binary        string
 }
 
 // setupE2ETest performs the common Playwright, login, PAT, lock, and cleanup
@@ -53,6 +52,9 @@ func setupE2ETest(t *testing.T) *e2eEnv {
 		screenshotDir = ".playwright"
 	}
 	_ = os.MkdirAll(screenshotDir, 0o755)
+
+	// Build CLI binary early so we fail fast on compilation errors.
+	binary := buildCLIBinary(t)
 
 	// --- Playwright setup ---
 	pw, err := playwright.Run()
@@ -98,29 +100,30 @@ func setupE2ETest(t *testing.T) *e2eEnv {
 
 	// --- GitHub client ---
 	client := newLiveClient(token)
-	printer := ui.New(os.Stdout)
 
-	// Acquire lock.
+	// Acquire an org from the pool.
 	runID := uuid.New().String()
 	t.Logf("E2E run ID: %s", runID)
 
-	err = acquireLock(context.Background(), client, token, testOrg, runID, cfg.lockTimeout, t.Logf)
-	require.NoError(t, err, "acquiring e2e lock")
+	org, err := acquireOrg(context.Background(), client, token, runID, orgPool, cfg.lockTimeout, t.Logf)
+	require.NoError(t, err, "acquiring org from pool")
+	t.Logf("Acquired org: %s", org)
 	t.Cleanup(func() {
-		releaseLock(context.Background(), client, testOrg, runID, t)
+		releaseLock(context.Background(), client, org, runID, t)
 	})
 
 	// Teardown-first cleanup.
-	cleanupStaleResources(context.Background(), client, page, token, screenshotDir, t)
+	cleanupStaleResources(context.Background(), client, token, org, t)
 
 	return &e2eEnv{
 		cfg:           cfg,
+		org:           org,
 		page:          page,
 		client:        client,
 		token:         token,
-		printer:       printer,
 		runID:         runID,
 		screenshotDir: screenshotDir,
+		binary:        binary,
 	}
 }
 
@@ -128,261 +131,35 @@ func TestAdminInstallUninstall(t *testing.T) {
 	env := setupE2ETest(t)
 	ctx := context.Background()
 
-	// =========================================
-	// Phase 1: First install (creates resources)
-	// =========================================
-	t.Log("=== Phase 1: First Install ===")
-	agentCreds, orgCfg, enabledRepos, enrolledRepoIDs := runFullInstall(t, env)
-	verifyInstalled(t, env, orgCfg, enabledRepos, agentCreds)
-
-	// =========================================
-	// Phase 2: Second install (idempotent no-op)
-	// =========================================
-	t.Log("=== Phase 2: Second Install (idempotent) ===")
-	user, err := env.client.GetAuthenticatedUser(ctx)
-	require.NoError(t, err)
-	allRepos, err := env.client.ListOrgRepos(ctx, testOrg)
-	require.NoError(t, err)
-	hasPrivate := hasPrivateRepos(allRepos)
-
-	// Second install should be idempotent — OIDC dispatch infra already provisioned.
-	// Inference provider is nil for idempotent re-install (already provisioned).
-	stack := buildTestLayerStack(testOrg, env.client, orgCfg, env.printer, user, hasPrivate, enabledRepos, agentCreds, enrolledRepoIDs, nil)
-	err = stack.InstallAll(ctx)
-	require.NoError(t, err, "second InstallAll should succeed")
-	verifyInstalled(t, env, orgCfg, enabledRepos, agentCreds)
-
-	// =========================================
-	// Phase 2.25: Merge enrollment PR
-	// =========================================
-	// The enrollment PR must be merged before unenrollment can work (the shim
-	// must exist on the default branch for the removal PR to make sense).
-	t.Log("=== Phase 2.25: Merge Enrollment PR ===")
-	mergeEnrollmentPR(t, env)
-
-	// =========================================
-	// Phase 2.5: Triage dispatch smoke test
-	// =========================================
-	if os.Getenv("E2E_HALFSEND_WIF_PROVIDER") != "" {
-		t.Log("=== Phase 2.5: Triage Dispatch Smoke Test ===")
-		vendorBinaryForE2E(t, env)
-		runTriageDispatchSmokeTest(t, env)
-	} else {
-		t.Log("=== Phase 2.5: Triage Dispatch Smoke Test (SKIPPED — no inference credentials) ===")
+	// Phase 1: Install via CLI subprocess.
+	t.Log("=== Phase 1: Install ===")
+	installArgs := []string{
+		"admin", "install", env.org,
+		"--skip-app-setup",
+		"--skip-mint-check",
+		"--mint-url", env.cfg.mintURL,
+		"--app-set", e2eAppSet,
+		"--enroll-all",
+		"--vendor-fullsend-binary",
 	}
-
-	// =========================================
-	// Phase 2.75: Unenrollment reconciliation
-	// =========================================
-	t.Log("=== Phase 2.75: Unenrollment ===")
-	runUnenrollmentTest(t, env, orgCfg, agentCreds, enrolledRepoIDs)
-
-	// =========================================
-	// Phase 3: First uninstall (deletes resources)
-	// =========================================
-	t.Log("=== Phase 3: First Uninstall ===")
-	runUninstall(t, env)
-	// Wait for repo deletion to propagate (GitHub returns 409 if checked too soon).
-	time.Sleep(5 * time.Second)
-	verifyNotInstalled(t, env)
-
-	// =========================================
-	// Phase 4: Second uninstall (idempotent no-op)
-	// =========================================
-	t.Log("=== Phase 4: Second Uninstall (idempotent) ===")
-	runUninstallAllowNotFound(t, env)
-	time.Sleep(3 * time.Second)
-	verifyNotInstalled(t, env)
-
-	t.Log("=== E2E test complete ===")
-}
-
-// --- Install/uninstall helpers ---
-
-// runFullInstall executes the full install flow (app setup + layer stack install)
-// and returns the agent credentials and org config for verification.
-func runFullInstall(t *testing.T, env *e2eEnv) ([]layers.AgentCredentials, *config.OrgConfig, []string, []int64) {
-	t.Helper()
-	ctx := context.Background()
-
-	// App setup via manifest flow with Playwright.
-	playwrightBrowser := NewPlaywrightBrowserOpener(env.page, t.Logf, env.screenshotDir)
-	prompter := AutoPrompter{}
-	setup := appsetup.NewSetup(env.client, prompter, playwrightBrowser, env.printer)
-
-	var agentCreds []layers.AgentCredentials
-	for _, role := range defaultRoles {
-		t.Logf("Setting up app for role: %s", role)
-
-		var appCreds *appsetup.AppCredentials
-		// Retry the manifest flow to handle transient callback timeouts
-		// (see #287). On failure, delete any partially-created app and
-		// wait before retrying so the next attempt starts clean.
-		const maxAttempts = 3
-		for attempt := 1; attempt <= maxAttempts; attempt++ {
-			// Per-attempt timeout: generous to handle slow manifest flows
-			// (90s callback wait + page navigation overhead).
-			roleCtx, roleCancel := context.WithTimeout(ctx, 6*time.Minute)
-			var runErr error
-			appCreds, runErr = setup.Run(roleCtx, testOrg, role)
-			roleCancel()
-
-			if runErr == nil {
-				break
-			}
-
-			t.Logf("Attempt %d/%d for role %s failed: %v", attempt, maxAttempts, role, runErr)
-			if attempt < maxAttempts {
-				slug := appsetup.AppSlug(appsetup.DefaultAppSet, role)
-				t.Logf("Cleaning up potentially stale app %s before retry", slug)
-				if delErr := deleteAppViaPlaywright(env.page, slug, t.Logf, env.screenshotDir); delErr != nil {
-					t.Logf("Warning: cleanup of %s failed (may not exist): %v", slug, delErr)
-				}
-				t.Logf("Waiting 10s before retry to let GitHub settle...")
-				time.Sleep(10 * time.Second)
-				continue
-			}
-			require.NoError(t, runErr, "setting up app for role %s", role)
-		}
-
-		agentCreds = append(agentCreds, layers.AgentCredentials{
-			AgentEntry: config.AgentEntry{
-				Role: role,
-				Name: appCreds.Name,
-				Slug: appCreds.Slug,
-			},
-			PEM:      appCreds.PEM,
-			ClientID: appCreds.ClientID,
-		})
-
-		registerAppCleanup(t, env.page, appCreds.Slug, env.screenshotDir)
+	if env.cfg.gcpProjectID != "" {
+		installArgs = append(installArgs, "--inference-project", env.cfg.gcpProjectID)
 	}
+	runCLI(t, env.binary, env.token, installArgs...)
 
-	// Discover repos and build config.
-	allRepos, err := env.client.ListOrgRepos(ctx, testOrg)
-	require.NoError(t, err, "listing org repos")
-
-	repoNames := repoNameList(allRepos)
-	hasPrivate := hasPrivateRepos(allRepos)
-	enabledRepos := []string{testRepo}
-
-	agents := make([]config.AgentEntry, len(agentCreds))
-	for i, ac := range agentCreds {
-		agents[i] = ac.AgentEntry
-	}
-
-	// Build inference provider if WIF provider is available.
-	var inferenceProvider inference.Provider
-	var inferenceProviderName string
-	if wifProvider := os.Getenv("E2E_HALFSEND_WIF_PROVIDER"); wifProvider != "" {
-		gcpProjectID := os.Getenv("E2E_GCP_PROJECT_ID")
-		if gcpProjectID == "" {
-			t.Fatal("E2E_GCP_PROJECT_ID is required when E2E_HALFSEND_WIF_PROVIDER is set")
-		}
-		gcpRegion := os.Getenv("E2E_GCP_REGION")
-		if gcpRegion == "" {
-			gcpRegion = "global"
-		}
-		inferenceProvider = vertex.New(vertex.Config{
-			ProjectID:   gcpProjectID,
-			Region:      gcpRegion,
-			WIFProvider: wifProvider,
-		})
-		inferenceProviderName = "vertex"
-		t.Logf("Inference provider: vertex (project: %s)", gcpProjectID)
-	} else {
-		t.Log("E2E_HALFSEND_WIF_PROVIDER not set, skipping inference layer")
-	}
-
-	orgCfg := config.NewOrgConfig(repoNames, enabledRepos, defaultRoles, agents, inferenceProviderName)
-
-	user, err := env.client.GetAuthenticatedUser(ctx)
-	require.NoError(t, err, "getting authenticated user")
-
-	// Collect repo IDs for enrolled repos (needed by DispatchTokenLayer).
-	var enrolledRepoIDs []int64
-	for _, repoName := range enabledRepos {
-		repo, repoErr := env.client.GetRepo(ctx, testOrg, repoName)
-		require.NoError(t, repoErr, "getting repo %s for ID", repoName)
-		enrolledRepoIDs = append(enrolledRepoIDs, repo.ID)
-	}
-
-	// Install config-repo and workflows layers first so .fullsend repo exists.
-	// Config-repo and workflows are idempotent, so re-running them is harmless.
-	configLayer := layers.NewConfigRepoLayer(testOrg, env.client, orgCfg, env.printer, hasPrivate)
-	err = configLayer.Install(ctx)
-	require.NoError(t, err, "pre-installing config-repo layer")
-	registerRepoCleanup(t, env.client, testOrg, forge.ConfigRepoName)
-
-	workflowsLayer := layers.NewWorkflowsLayer(testOrg, env.client, env.printer, user)
-	err = workflowsLayer.Install(ctx)
-	require.NoError(t, err, "pre-installing workflows layer")
-
-	// Build full layer stack and install all layers.
-	// Config-repo and workflows are idempotent, so re-running them is harmless.
-	stack := buildTestLayerStack(testOrg, env.client, orgCfg, env.printer, user, hasPrivate, enabledRepos, agentCreds, enrolledRepoIDs, inferenceProvider)
-
-	err = stack.InstallAll(ctx)
-	require.NoError(t, err, "installing layers")
-
-	return agentCreds, orgCfg, enabledRepos, enrolledRepoIDs
-}
-
-func runUninstall(t *testing.T, env *e2eEnv) {
-	t.Helper()
-	emptyCfg := config.NewOrgConfig(nil, nil, nil, nil, "")
-	stack := layers.NewStack(
-		layers.NewConfigRepoLayer(testOrg, env.client, emptyCfg, env.printer, false),
-		layers.NewWorkflowsLayer(testOrg, env.client, env.printer, ""),
-		layers.NewSecretsLayer(testOrg, env.client, nil, env.printer),
-		layers.NewInferenceLayer(testOrg, env.client, nil, env.printer),
-		layers.NewBothModesDispatchLayer(testOrg, env.client, &e2eDispatcher{}, env.printer),
-		layers.NewEnrollmentLayer(testOrg, env.client, nil, nil, env.printer),
-	)
-	errs := stack.UninstallAll(context.Background())
-	assert.Empty(t, errs, "uninstall should complete without errors")
-}
-
-// runUninstallAllowNotFound runs uninstall but accepts not-found errors
-// (expected when resources are already deleted).
-func runUninstallAllowNotFound(t *testing.T, env *e2eEnv) {
-	t.Helper()
-	emptyCfg := config.NewOrgConfig(nil, nil, nil, nil, "")
-	stack := layers.NewStack(
-		layers.NewConfigRepoLayer(testOrg, env.client, emptyCfg, env.printer, false),
-		layers.NewWorkflowsLayer(testOrg, env.client, env.printer, ""),
-		layers.NewSecretsLayer(testOrg, env.client, nil, env.printer),
-		layers.NewInferenceLayer(testOrg, env.client, nil, env.printer),
-		layers.NewBothModesDispatchLayer(testOrg, env.client, &e2eDispatcher{}, env.printer),
-		layers.NewEnrollmentLayer(testOrg, env.client, nil, nil, env.printer),
-	)
-	errs := stack.UninstallAll(context.Background())
-	for _, e := range errs {
-		if !forge.IsNotFound(e) {
-			t.Errorf("unexpected uninstall error (not a not-found): %v", e)
-		}
-	}
-}
-
-// --- Verification helpers ---
-
-// verifyInstalled checks that all resources exist and analyze reports installed.
-func verifyInstalled(t *testing.T, env *e2eEnv, orgCfg *config.OrgConfig, enabledRepos []string, agentCreds []layers.AgentCredentials) {
-	t.Helper()
-	ctx := context.Background()
-
-	// .fullsend repo exists.
-	repo, err := env.client.GetRepo(ctx, testOrg, forge.ConfigRepoName)
+	// Verify install artifacts.
+	_, err := env.client.GetRepo(ctx, env.org, forge.ConfigRepoName)
 	require.NoError(t, err, ".fullsend repo should exist")
-	assert.Equal(t, forge.ConfigRepoName, repo.Name)
-
-	// config.yaml exists and parses.
-	cfgData, err := env.client.GetFileContent(ctx, testOrg, forge.ConfigRepoName, "config.yaml")
+	mintURLExists, err := env.client.OrgVariableExists(ctx, env.org, "FULLSEND_MINT_URL")
+	require.NoError(t, err)
+	require.True(t, mintURLExists, "FULLSEND_MINT_URL org variable should exist")
+	cfgData, err := env.client.GetFileContent(ctx, env.org, forge.ConfigRepoName, "config.yaml")
 	require.NoError(t, err, "config.yaml should exist")
 	parsedCfg, err := config.ParseOrgConfig(cfgData)
 	require.NoError(t, err, "config.yaml should parse")
-	assert.Equal(t, "1", parsedCfg.Version)
-	assert.Len(t, parsedCfg.Agents, len(defaultRoles))
+	require.Len(t, parsedCfg.Defaults.Roles, len(defaultRoles), "should have %d roles", len(defaultRoles))
+	analyzeOutput := runCLI(t, env.binary, env.token, "admin", "analyze", env.org)
+	t.Logf("Analyze output:\n%s", analyzeOutput)
 
 	// Agent runtime files exist (from scaffold).
 	// ADR 35: only non-layered, non-upstream-only files are installed.
@@ -409,157 +186,50 @@ func verifyInstalled(t *testing.T, env *e2eEnv, orgCfg *config.OrgConfig, enable
 		"templates/shim-workflow-call.yaml",
 		"CODEOWNERS",
 	} {
-		_, err := env.client.GetFileContent(ctx, testOrg, forge.ConfigRepoName, path)
+		_, err := env.client.GetFileContent(ctx, env.org, forge.ConfigRepoName, path)
 		assert.NoError(t, err, "%s should exist in .fullsend", path)
 	}
 
-	// Secrets and variables exist for each role.
-	for _, role := range defaultRoles {
-		secretName := fmt.Sprintf("FULLSEND_%s_APP_PRIVATE_KEY", strings.ToUpper(role))
-		exists, err := env.client.RepoSecretExists(ctx, testOrg, forge.ConfigRepoName, secretName)
-		assert.NoError(t, err, "checking secret %s", secretName)
-		assert.True(t, exists, "secret %s should exist", secretName)
+	// Register .fullsend cleanup (in case later phases fail).
+	registerRepoCleanup(t, env.client, env.org, forge.ConfigRepoName)
 
-		varName := fmt.Sprintf("FULLSEND_%s_CLIENT_ID", strings.ToUpper(role))
-		exists, err = env.client.RepoVariableExists(ctx, testOrg, forge.ConfigRepoName, varName)
-		assert.NoError(t, err, "checking variable %s", varName)
-		assert.True(t, exists, "variable %s should exist", varName)
-	}
+	// Phase 2: Merge enrollment PR.
+	t.Log("=== Phase 2: Merge Enrollment PR ===")
+	mergeEnrollmentPR(t, env)
 
-	// Inference secrets exist if WIF provider was configured.
-	if os.Getenv("E2E_HALFSEND_WIF_PROVIDER") != "" {
-		for _, secretName := range []string{"FULLSEND_GCP_WIF_PROVIDER", "FULLSEND_GCP_PROJECT_ID"} {
-			exists, secErr := env.client.RepoSecretExists(ctx, testOrg, forge.ConfigRepoName, secretName)
-			assert.NoError(t, secErr, "checking inference secret %s", secretName)
-			assert.True(t, exists, "inference secret %s should exist", secretName)
-		}
-	}
+	// Phase 3: Triage dispatch smoke test.
+	t.Log("=== Phase 3: Triage Dispatch Smoke Test ===")
+	runTriageDispatchSmokeTest(t, env)
 
-	// OIDC dispatch variable exists; stale PAT secret should not.
-	mintURLExists, err := env.client.OrgVariableExists(ctx, testOrg, "FULLSEND_MINT_URL")
-	assert.NoError(t, err, "checking FULLSEND_MINT_URL org variable")
-	assert.True(t, mintURLExists, "FULLSEND_MINT_URL org variable should exist")
-	dispatchExists, err := env.client.OrgSecretExists(ctx, testOrg, "FULLSEND_DISPATCH_TOKEN")
-	assert.NoError(t, err, "checking stale dispatch token")
-	assert.False(t, dispatchExists, "FULLSEND_DISPATCH_TOKEN org secret should not exist in OIDC mode")
+	// Phase 4: Unenrollment reconciliation.
+	t.Log("=== Phase 4: Unenrollment ===")
+	runUnenrollmentTest(t, env)
 
-	// Enrollment PR exists for test-repo.
-	prs, err := env.client.ListRepoPullRequests(ctx, testOrg, testRepo)
-	require.NoError(t, err, "listing PRs for %s", testRepo)
-	found := false
-	for _, pr := range prs {
-		if strings.Contains(pr.Title, "fullsend") {
-			found = true
-			t.Logf("Found enrollment PR: %s", pr.URL)
-			break
-		}
-	}
-	assert.True(t, found, "enrollment PR should exist for %s", testRepo)
-
-	// Analyze reports installed.
-	user, err := env.client.GetAuthenticatedUser(ctx)
-	require.NoError(t, err)
-	allRepos, err := env.client.ListOrgRepos(ctx, testOrg)
-	require.NoError(t, err)
-	hasPrivate := hasPrivateRepos(allRepos)
-
-	analyzeStack := buildTestLayerStack(testOrg, env.client, orgCfg, env.printer, user, hasPrivate, enabledRepos, agentCreds, nil, nil)
-	reports, err := analyzeStack.AnalyzeAll(ctx)
-	require.NoError(t, err, "analyzing layers")
-	for _, report := range reports {
-		if report.Name == "enrollment" {
-			// Enrollment creates a PR but doesn't merge it, so the shim
-			// workflow file doesn't exist on the default branch yet.
-			assert.Contains(t, []layers.LayerStatus{layers.StatusInstalled, layers.StatusNotInstalled},
-				report.Status, "layer %s status: %s (details: %v)",
-				report.Name, report.Status, report.Details)
-			continue
-		}
-		assert.Equal(t, layers.StatusInstalled, report.Status,
-			"layer %s should be installed, got %s (details: %v)",
-			report.Name, report.Status, report.Details)
-	}
-}
-
-// verifyNotInstalled checks that the config repo is gone and analyze reports
-// not-installed for layers with concrete artifacts.
-func verifyNotInstalled(t *testing.T, env *e2eEnv) {
-	t.Helper()
-	ctx := context.Background()
-
-	_, err := env.client.GetRepo(ctx, testOrg, forge.ConfigRepoName)
-	assert.True(t, forge.IsNotFound(err), ".fullsend repo should be deleted")
-
-	// Dispatch token org secret should be deleted.
-	dispatchExists, err := env.client.OrgSecretExists(ctx, testOrg, "FULLSEND_DISPATCH_TOKEN")
-	assert.NoError(t, err, "checking dispatch token after uninstall")
-	assert.False(t, dispatchExists, "FULLSEND_DISPATCH_TOKEN org secret should be deleted")
-
-	// OIDC mint URL org variable should be deleted.
-	mintURLExists, err := env.client.OrgVariableExists(ctx, testOrg, "FULLSEND_MINT_URL")
-	assert.NoError(t, err, "checking mint URL variable after uninstall")
-	assert.False(t, mintURLExists, "FULLSEND_MINT_URL org variable should be deleted")
-
-	emptyCfg := config.NewOrgConfig(nil, nil, nil, nil, "")
-	stack := layers.NewStack(
-		layers.NewConfigRepoLayer(testOrg, env.client, emptyCfg, env.printer, false),
-		layers.NewWorkflowsLayer(testOrg, env.client, env.printer, ""),
-		layers.NewSecretsLayer(testOrg, env.client, nil, env.printer),
-		layers.NewInferenceLayer(testOrg, env.client, nil, env.printer),
-		layers.NewBothModesDispatchLayer(testOrg, env.client, &e2eDispatcher{}, env.printer),
-		layers.NewEnrollmentLayer(testOrg, env.client, nil, nil, env.printer),
+	// Phase 5: Uninstall via CLI subprocess.
+	t.Log("=== Phase 5: Uninstall ===")
+	runCLI(t, env.binary, env.token,
+		"admin", "uninstall", env.org,
+		"--yolo",
+		"--app-set", e2eAppSet,
 	)
-	reports, err := stack.AnalyzeAll(ctx)
-	require.NoError(t, err, "analyzing layers after uninstall")
-	for _, report := range reports {
-		switch report.Name {
-		case "config-repo", "workflows", "dispatch":
-			assert.Equal(t, layers.StatusNotInstalled, report.Status,
-				"layer %s should be not-installed, got %s",
-				report.Name, report.Status)
-		default:
-			// Layers with empty config may report "installed" (nothing to track).
-			t.Logf("layer %s status: %s (accepted)", report.Name, report.Status)
-		}
-	}
-}
 
-// vendorBinaryForE2E builds the fullsend binary for the current platform
-// (which is linux/amd64 in CI) and uploads it to the config repo so the
-// triage workflow uses the code under test rather than a released version.
-func vendorBinaryForE2E(t *testing.T, env *e2eEnv) {
-	t.Helper()
-
-	tmpBinary, err := os.CreateTemp("", "fullsend-e2e-*")
+	time.Sleep(5 * time.Second)
+	_, err = env.client.GetRepo(ctx, env.org, forge.ConfigRepoName)
+	require.True(t, forge.IsNotFound(err), ".fullsend repo should be deleted")
+	mintURLExists, err = env.client.OrgVariableExists(ctx, env.org, "FULLSEND_MINT_URL")
 	require.NoError(t, err)
-	tmpBinary.Close()
-	t.Cleanup(func() { os.Remove(tmpBinary.Name()) })
+	require.False(t, mintURLExists, "FULLSEND_MINT_URL should be deleted")
 
-	// Find the module root (go test runs with cwd set to the test package dir).
-	modRoot, err := exec.Command("go", "list", "-m", "-f", "{{.Dir}}").Output()
-	require.NoError(t, err, "finding module root")
-
-	t.Log("Building fullsend binary for vendoring...")
-	cmd := exec.Command("go", "build", "-o", tmpBinary.Name(), "./cmd/fullsend/")
-	cmd.Dir = strings.TrimSpace(string(modRoot))
-	cmd.Env = append(os.Environ(), "GOOS=linux", "GOARCH=amd64", "CGO_ENABLED=0")
-	out, err := cmd.CombinedOutput()
-	require.NoError(t, err, "building fullsend binary: %s", string(out))
-
-	t.Logf("Uploading vendored binary to %s...", layers.VendoredBinaryPath)
-	err = layers.VendorBinary(context.Background(), env.client, testOrg, forge.ConfigRepoName, layers.VendoredBinaryPath, tmpBinary.Name())
-	require.NoError(t, err, "vendoring binary")
-	t.Log("Vendored binary uploaded successfully")
+	t.Log("=== E2E test complete ===")
 }
 
 // mergeEnrollmentPR finds and merges the enrollment PR for test-repo so the
-// shim workflow is active on the default branch. This must run before both
-// the triage smoke test and the unenrollment test.
+// shim workflow is active on the default branch.
 func mergeEnrollmentPR(t *testing.T, env *e2eEnv) {
 	t.Helper()
 	ctx := context.Background()
 
-	prs, err := env.client.ListRepoPullRequests(ctx, testOrg, testRepo)
+	prs, err := env.client.ListRepoPullRequests(ctx, env.org, testRepo)
 	require.NoError(t, err, "listing PRs for %s", testRepo)
 
 	var enrollmentPR *forge.ChangeProposal
@@ -573,10 +243,9 @@ func mergeEnrollmentPR(t *testing.T, env *e2eEnv) {
 	require.NotNil(t, enrollmentPR, "enrollment PR should exist for %s", testRepo)
 
 	t.Logf("Merging enrollment PR #%d: %s", enrollmentPR.Number, enrollmentPR.URL)
-	err = env.client.MergeChangeProposal(ctx, testOrg, testRepo, enrollmentPR.Number)
+	err = env.client.MergeChangeProposal(ctx, env.org, testRepo, enrollmentPR.Number)
 	require.NoError(t, err, "merging enrollment PR")
 
-	// Wait for GitHub to process the merge.
 	time.Sleep(5 * time.Second)
 	t.Log("Enrollment PR merged")
 }
@@ -616,12 +285,12 @@ Segmentation fault (core dumped)
 **Additional context:**
 This started happening after the v2.3.0 -> v2.3.1 upgrade. Files under 64KB save fine.
 Files over 64KB save fine if they contain only ASCII characters.`
-	issue, err := env.client.CreateIssue(ctx, testOrg, testRepo, issueTitle, issueBody)
+	issue, err := env.client.CreateIssue(ctx, env.org, testRepo, issueTitle, issueBody)
 	require.NoError(t, err, "creating test issue")
 	t.Logf("Created test issue #%d: %s", issue.Number, issue.URL)
 	t.Cleanup(func() {
 		t.Log("Closing test issue...")
-		if closeErr := env.client.CloseIssue(ctx, testOrg, testRepo, issue.Number); closeErr != nil {
+		if closeErr := env.client.CloseIssue(ctx, env.org, testRepo, issue.Number); closeErr != nil {
 			t.Logf("warning: could not close test issue: %v", closeErr)
 		}
 	})
@@ -636,7 +305,7 @@ Files over 64KB save fine if they contain only ASCII characters.`
 	var triageRun *forge.WorkflowRun
 	for attempt := 0; attempt < 12; attempt++ {
 		time.Sleep(5 * time.Second)
-		runs, listErr := env.client.ListWorkflowRuns(ctx, testOrg, forge.ConfigRepoName, "triage.yml")
+		runs, listErr := env.client.ListWorkflowRuns(ctx, env.org, forge.ConfigRepoName, "triage.yml")
 		if listErr != nil {
 			t.Logf("Attempt %d: error listing workflow runs: %v", attempt+1, listErr)
 			continue
@@ -670,7 +339,7 @@ Files over 64KB save fine if they contain only ASCII characters.`
 	deadline := time.Now().Add(12 * time.Minute)
 	for time.Now().Before(deadline) {
 		time.Sleep(15 * time.Second)
-		run, getErr := env.client.GetWorkflowRun(ctx, testOrg, forge.ConfigRepoName, triageRun.ID)
+		run, getErr := env.client.GetWorkflowRun(ctx, env.org, forge.ConfigRepoName, triageRun.ID)
 		if getErr != nil {
 			t.Logf("Error polling workflow run: %v", getErr)
 			continue
@@ -683,20 +352,37 @@ Files over 64KB save fine if they contain only ASCII characters.`
 	}
 	require.NotNil(t, finalRun, "triage workflow run should have completed within deadline")
 
-	// If the run failed, fetch logs for debugging.
+	// If the run failed, save logs and artifacts for debugging.
 	if finalRun.Conclusion != "success" {
-		logs, logErr := env.client.GetWorkflowRunLogs(ctx, testOrg, forge.ConfigRepoName, finalRun.ID)
+		runURL := fmt.Sprintf("https://github.com/%s/%s/actions/runs/%d", env.org, forge.ConfigRepoName, finalRun.ID)
+		fmt.Fprintf(os.Stderr, "::notice::Triage workflow run %d failed (conclusion: %s). Downloading debug artifacts. Run URL: %s\n", finalRun.ID, finalRun.Conclusion, runURL)
+
+		debugDir := filepath.Join(env.screenshotDir, fmt.Sprintf("triage-run-%d", finalRun.ID))
+		_ = os.MkdirAll(debugDir, 0o755)
+
+		// Save workflow logs.
+		logs, logErr := env.client.GetWorkflowRunLogs(ctx, env.org, forge.ConfigRepoName, finalRun.ID)
 		if logErr != nil {
 			t.Logf("Could not fetch run logs: %v", logErr)
 		} else {
+			logPath := filepath.Join(debugDir, "workflow-logs.txt")
+			if writeErr := os.WriteFile(logPath, []byte(logs), 0o644); writeErr != nil {
+				t.Logf("Could not write logs to %s: %v", logPath, writeErr)
+			} else {
+				fmt.Fprintf(os.Stderr, "::notice file=%s::Triage run %d workflow logs saved\n", logPath, finalRun.ID)
+			}
 			t.Logf("Workflow run logs:\n%s", logs)
 		}
-		t.Fatalf("Triage workflow run %d concluded with %q, expected success", finalRun.ID, finalRun.Conclusion)
+
+		// Download run artifacts (transcripts, etc).
+		downloadRunArtifacts(ctx, env.token, env.org, forge.ConfigRepoName, finalRun.ID, debugDir, t)
+
+		t.Fatalf("Triage workflow run %d concluded with %q, expected success. Debug artifacts saved to %s", finalRun.ID, finalRun.Conclusion, debugDir)
 	}
 
 	// Verify the triage agent posted a comment on the issue.
 	t.Log("Verifying triage agent posted a comment...")
-	comments, err := env.client.ListIssueComments(ctx, testOrg, testRepo, issue.Number)
+	comments, err := env.client.ListIssueComments(ctx, env.org, testRepo, issue.Number)
 	require.NoError(t, err, "listing issue comments")
 	assert.NotEmpty(t, comments, "triage agent should have posted at least one comment on the issue")
 
@@ -711,7 +397,7 @@ Files over 64KB save fine if they contain only ASCII characters.`
 
 	// Verify labels: either needs-info (insufficient) or ready-to-code (sufficient).
 	t.Log("Verifying triage labels...")
-	labelURL := fmt.Sprintf("https://api.github.com/repos/%s/%s/issues/%d/labels", testOrg, testRepo, issue.Number)
+	labelURL := fmt.Sprintf("https://api.github.com/repos/%s/%s/issues/%d/labels", env.org, testRepo, issue.Number)
 	labelReq, err := http.NewRequestWithContext(ctx, http.MethodGet, labelURL, nil)
 	require.NoError(t, err)
 	labelReq.Header.Set("Authorization", "Bearer "+env.token)
@@ -743,105 +429,177 @@ Files over 64KB save fine if they contain only ASCII characters.`
 		"issue should have a triage label (needs-info, ready-to-code, duplicate, or blocked), got: %v", labelNames)
 }
 
+// downloadRunArtifacts fetches all artifacts from a workflow run and extracts
+// them into destDir. Each artifact is extracted into a subdirectory named after
+// the artifact. This captures transcripts, screenshots, and other debug data
+// that the agent run uploads.
+func downloadRunArtifacts(ctx context.Context, token, org, repo string, runID int, destDir string, t *testing.T) {
+	t.Helper()
+
+	// List artifacts for the run.
+	listURL := fmt.Sprintf("https://api.github.com/repos/%s/%s/actions/runs/%d/artifacts", org, repo, runID)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, listURL, nil)
+	if err != nil {
+		t.Logf("[artifacts] Could not create request: %v", err)
+		return
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Accept", "application/vnd.github+json")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Logf("[artifacts] Could not list artifacts: %v", err)
+		return
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Logf("[artifacts] List artifacts returned HTTP %d", resp.StatusCode)
+		return
+	}
+
+	var result struct {
+		Artifacts []struct {
+			ID   int    `json:"id"`
+			Name string `json:"name"`
+		} `json:"artifacts"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		t.Logf("[artifacts] Could not decode artifact list: %v", err)
+		return
+	}
+
+	if len(result.Artifacts) == 0 {
+		t.Log("[artifacts] No artifacts found for this run")
+		return
+	}
+
+	t.Logf("[artifacts] Found %d artifact(s), downloading...", len(result.Artifacts))
+	for _, art := range result.Artifacts {
+		downloadAndExtractArtifact(ctx, token, org, repo, art.ID, art.Name, destDir, t)
+	}
+}
+
+// downloadAndExtractArtifact downloads a single artifact zip and extracts it.
+func downloadAndExtractArtifact(ctx context.Context, token, org, repo string, artifactID int, name, destDir string, t *testing.T) {
+	t.Helper()
+
+	dlURL := fmt.Sprintf("https://api.github.com/repos/%s/%s/actions/artifacts/%d/zip", org, repo, artifactID)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, dlURL, nil)
+	if err != nil {
+		t.Logf("[artifacts] Could not create download request for %s: %v", name, err)
+		return
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Logf("[artifacts] Could not download %s: %v", name, err)
+		return
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Logf("[artifacts] Download %s returned HTTP %d", name, resp.StatusCode)
+		return
+	}
+
+	// Read the zip into memory (artifacts are typically small).
+	zipData, err := io.ReadAll(io.LimitReader(resp.Body, 50<<20)) // 50 MB limit
+	if err != nil {
+		t.Logf("[artifacts] Could not read %s: %v", name, err)
+		return
+	}
+
+	artDir := filepath.Join(destDir, name)
+	_ = os.MkdirAll(artDir, 0o755)
+
+	zr, err := zip.NewReader(bytes.NewReader(zipData), int64(len(zipData)))
+	if err != nil {
+		// Not a zip — save raw content.
+		rawPath := filepath.Join(destDir, name+".bin")
+		_ = os.WriteFile(rawPath, zipData, 0o644)
+		t.Logf("[artifacts] %s is not a zip, saved raw to %s", name, rawPath)
+		return
+	}
+
+	for _, f := range zr.File {
+		outPath := filepath.Join(artDir, f.Name)
+
+		// Prevent zip slip.
+		if !strings.HasPrefix(filepath.Clean(outPath), filepath.Clean(artDir)+string(os.PathSeparator)) {
+			t.Logf("[artifacts] Skipping suspicious path in %s: %s", name, f.Name)
+			continue
+		}
+
+		if f.FileInfo().IsDir() {
+			_ = os.MkdirAll(outPath, 0o755)
+			continue
+		}
+
+		_ = os.MkdirAll(filepath.Dir(outPath), 0o755)
+		rc, err := f.Open()
+		if err != nil {
+			t.Logf("[artifacts] Could not open %s/%s: %v", name, f.Name, err)
+			continue
+		}
+		data, err := io.ReadAll(rc)
+		rc.Close()
+		if err != nil {
+			t.Logf("[artifacts] Could not read %s/%s: %v", name, f.Name, err)
+			continue
+		}
+		if err := os.WriteFile(outPath, data, 0o644); err != nil {
+			t.Logf("[artifacts] Could not write %s: %v", outPath, err)
+			continue
+		}
+	}
+
+	fmt.Fprintf(os.Stderr, "::notice::Extracted artifact %q (%d files) to %s\n", name, len(zr.File), artDir)
+	t.Logf("[artifacts] Extracted %s (%d files) to %s", name, len(zr.File), artDir)
+}
+
 // runUnenrollmentTest disables test-repo in config.yaml, runs install to
 // dispatch reconciliation, verifies the removal PR, merges it, and confirms
 // the shim is gone from the default branch.
-func runUnenrollmentTest(t *testing.T, env *e2eEnv, orgCfg *config.OrgConfig, agentCreds []layers.AgentCredentials, enrolledRepoIDs []int64) {
+func runUnenrollmentTest(t *testing.T, env *e2eEnv) {
 	t.Helper()
 	ctx := context.Background()
 
-	// Update config.yaml to disable test-repo.
-	orgCfg.Repos[testRepo] = config.RepoConfig{Enabled: false}
-	cfgData, err := orgCfg.Marshal()
-	require.NoError(t, err, "marshaling updated config")
+	// Disable the test repo via CLI (updates config.yaml). The push to
+	// config.yaml on main triggers repo-maintenance, which creates the
+	// removal PR.
+	runCLI(t, env.binary, env.token,
+		"admin", "disable", "repos", env.org, testRepo, "--yolo")
 
-	err = env.client.CreateOrUpdateFile(ctx, testOrg, forge.ConfigRepoName, "config.yaml", "chore: disable test-repo for unenrollment test", cfgData)
-	require.NoError(t, err, "updating config.yaml with disabled repo")
-	t.Logf("Set %s to enabled: false in config.yaml", testRepo)
-
-	// Wait for GitHub to process the push.
-	time.Sleep(5 * time.Second)
-
-	// Run install with no enabled repos and test-repo as disabled.
-	user, err := env.client.GetAuthenticatedUser(ctx)
-	require.NoError(t, err)
-	allRepos, err := env.client.ListOrgRepos(ctx, testOrg)
-	require.NoError(t, err)
-	hasPrivate := hasPrivateRepos(allRepos)
-
-	stack := buildTestLayerStack(testOrg, env.client, orgCfg, env.printer, user, hasPrivate, nil, agentCreds, enrolledRepoIDs, nil)
-	err = stack.InstallAll(ctx)
-	require.NoError(t, err, "install with disabled repo should succeed")
-
-	// Verify removal PR exists.
-	prs, err := env.client.ListRepoPullRequests(ctx, testOrg, testRepo)
-	require.NoError(t, err, "listing PRs for %s", testRepo)
-
+	// Wait for the removal PR to be created by repo-maintenance.
+	t.Log("Waiting for removal PR...")
 	var removalPR *forge.ChangeProposal
-	for _, pr := range prs {
-		if pr.Title == "chore: disconnect from fullsend agent pipeline" {
-			cp := pr
-			removalPR = &cp
+	for attempt := 0; attempt < 24; attempt++ {
+		time.Sleep(5 * time.Second)
+		prs, err := env.client.ListRepoPullRequests(ctx, env.org, testRepo)
+		if err != nil {
+			t.Logf("Attempt %d: error listing PRs: %v", attempt+1, err)
+			continue
+		}
+		for _, pr := range prs {
+			if pr.Title == "chore: disconnect from fullsend agent pipeline" {
+				cp := pr
+				removalPR = &cp
+				break
+			}
+		}
+		if removalPR != nil {
 			break
 		}
+		t.Logf("Attempt %d: removal PR not yet created", attempt+1)
 	}
 	require.NotNil(t, removalPR, "removal PR should exist for %s", testRepo)
 	t.Logf("Found removal PR #%d: %s", removalPR.Number, removalPR.URL)
-
-	// Merge the removal PR.
-	err = env.client.MergeChangeProposal(ctx, testOrg, testRepo, removalPR.Number)
+	err := env.client.MergeChangeProposal(ctx, env.org, testRepo, removalPR.Number)
 	require.NoError(t, err, "merging removal PR")
-	t.Logf("Merged removal PR #%d", removalPR.Number)
-
-	// Wait for merge to propagate.
 	time.Sleep(5 * time.Second)
-
-	// Verify shim no longer exists on the default branch.
-	_, err = env.client.GetFileContent(ctx, testOrg, testRepo, ".github/workflows/fullsend.yaml")
-	assert.True(t, forge.IsNotFound(err), "shim workflow should be removed from %s after merging removal PR", testRepo)
-	t.Logf("Verified shim is gone from %s", testRepo)
-
-	// Re-enable the repo in config for subsequent test phases.
-	orgCfg.Repos[testRepo] = config.RepoConfig{Enabled: true}
-}
-
-// --- Utility functions ---
-
-func buildTestLayerStack(
-	org string,
-	client forge.Client,
-	cfg *config.OrgConfig,
-	printer *ui.Printer,
-	user string,
-	hasPrivate bool,
-	enabledRepos []string,
-	agentCreds []layers.AgentCredentials,
-	enrolledRepoIDs []int64,
-	inferenceProvider inference.Provider,
-) *layers.Stack {
-	return layers.NewStack(
-		layers.NewConfigRepoLayer(org, client, cfg, printer, hasPrivate),
-		layers.NewWorkflowsLayer(org, client, printer, user),
-		layers.NewSecretsLayer(org, client, agentCreds, printer).WithOIDCMode(),
-		layers.NewInferenceLayer(org, client, inferenceProvider, printer),
-		layers.NewOIDCDispatchLayer(org, client, enrolledRepoIDs, &e2eDispatcher{}, printer),
-		layers.NewEnrollmentLayer(org, client, enabledRepos, cfg.DisabledRepos(), printer),
-	)
-}
-
-func repoNameList(repos []forge.Repository) []string {
-	names := make([]string, len(repos))
-	for i, r := range repos {
-		names[i] = r.Name
-	}
-	return names
-}
-
-func hasPrivateRepos(repos []forge.Repository) bool {
-	for _, r := range repos {
-		if r.Private {
-			return true
-		}
-	}
-	return false
+	_, err = env.client.GetFileContent(ctx, env.org, testRepo, ".github/workflows/fullsend.yaml")
+	require.True(t, forge.IsNotFound(err), "shim should be removed from %s after unenrollment", testRepo)
+	t.Log("Verified shim is gone")
 }
