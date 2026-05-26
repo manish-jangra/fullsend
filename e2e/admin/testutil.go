@@ -39,9 +39,10 @@ const (
 	freshLockThreshold = 1 * time.Minute
 
 	// staleLockTimeout is the age above which a lock from a crashed run
-	// is considered stale and eligible for force-reclaim. Independent of
-	// defaultLockTimeout so stale locks are recovered faster.
-	staleLockTimeout = 5 * time.Minute
+	// is considered stale and eligible for force-reclaim. Must be longer
+	// than the longest expected e2e run (~7 min) but shorter than the
+	// job timeout (30 min).
+	staleLockTimeout = 15 * time.Minute
 )
 
 // orgPool is the set of GitHub orgs available for parallel e2e test runs.
