@@ -1427,16 +1427,17 @@ func scanRepoContextFiles(repoDir string) []security.Finding {
 	return allFindings
 }
 
-// scanOutputFiles runs the secret redactor on extracted output files,
-// recursively walking all subdirectories (iteration-N/output/, etc.).
+// scanOutputFiles runs the output security pipeline (unicode normalization and
+// secret redaction) on extracted output files, recursively walking all
+// subdirectories (iteration-N/output/, etc.).
 func scanOutputFiles(outputDir, traceID string, printer *ui.Printer) error {
 	if _, err := os.Stat(outputDir); os.IsNotExist(err) {
 		printer.StepInfo("No output files to scan")
 		return nil
 	}
 
-	redactor := security.NewSecretRedactor()
-	redacted := 0
+	pipeline := security.OutputPipeline()
+	findingCount := 0
 	findingsPath := filepath.Join(outputDir, "security", "findings.jsonl")
 
 	err := filepath.WalkDir(outputDir, func(path string, d os.DirEntry, err error) error {
@@ -1457,12 +1458,13 @@ func scanOutputFiles(outputDir, traceID string, printer *ui.Printer) error {
 			return nil
 		}
 
-		result := redactor.Scan(string(content))
+		text := string(content)
+		result := pipeline.Scan(text)
 		if len(result.Findings) > 0 {
-			redacted += len(result.Findings)
+			findingCount += len(result.Findings)
 			relPath, _ := filepath.Rel(outputDir, path)
 			for _, f := range result.Findings {
-				printer.StepWarn(fmt.Sprintf("Redacted [%s] in %s: %s", f.Name, relPath, f.Detail))
+				printer.StepWarn(fmt.Sprintf("Sanitized [%s] in %s: %s", f.Name, relPath, f.Detail))
 				security.AppendFinding(findingsPath,
 					security.TracedFinding{
 						TraceID:   traceID,
@@ -1471,8 +1473,10 @@ func scanOutputFiles(outputDir, traceID string, printer *ui.Printer) error {
 						Finding:   f,
 					})
 			}
-			if writeErr := os.WriteFile(path, []byte(result.Sanitized), 0o644); writeErr != nil {
-				printer.StepWarn(fmt.Sprintf("Could not write redacted %s: %v", relPath, writeErr))
+			// Sanitized may be empty when all content was invisible characters.
+			out := result.Sanitized
+			if writeErr := os.WriteFile(path, []byte(out), 0o644); writeErr != nil {
+				printer.StepWarn(fmt.Sprintf("Could not write sanitized %s: %v", relPath, writeErr))
 			}
 		}
 		return nil
@@ -1481,10 +1485,10 @@ func scanOutputFiles(outputDir, traceID string, printer *ui.Printer) error {
 		return err
 	}
 
-	if redacted > 0 {
-		printer.StepWarn(fmt.Sprintf("Redacted %d secret(s) from output files", redacted))
+	if findingCount > 0 {
+		printer.StepWarn(fmt.Sprintf("Sanitized %d finding(s) in output files", findingCount))
 	} else {
-		printer.StepDone("Output files clean — no secrets found")
+		printer.StepDone("Output files clean — no issues found")
 	}
 	return nil
 }
