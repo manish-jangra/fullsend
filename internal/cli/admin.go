@@ -1721,23 +1721,21 @@ func runUninstall(ctx context.Context, client forge.Client, printer *ui.Printer,
 	printer.Blank()
 
 	// Check which apps actually exist before opening browser pages.
-	// GitHub App uninstallation via API (DELETE /app/installations/{id}) requires
-	// JWT auth from the app's own private key, not a PAT. Since we authenticate
-	// with a PAT, we open the browser to the app's advanced settings page instead.
-	// The correct URL for org-scoped apps is /organizations/{org}/settings/apps/{slug}/advanced
-	// (the /advanced suffix is required to see the delete button; /settings/apps/{slug}
-	// alone is for user-scoped apps and will 404 for org-scoped ones).
+	// We open the org's installation settings page (/organizations/{org}/settings/installations/{id})
+	// rather than the app's own /advanced page, because the /advanced delete button is only
+	// accessible to the app owner. Users who installed a third-party app are org admins, not
+	// app owners, so they must uninstall via the installation settings page instead.
 	if len(agentSlugs) > 0 {
 		// Find which slugs correspond to real installed apps.
 		var existingSlugs []string
+		installationIDs := make(map[string]int)
 		installations, listErr := client.ListOrgInstallations(ctx, org)
 		if listErr == nil {
-			installedSet := make(map[string]bool, len(installations))
 			for _, inst := range installations {
-				installedSet[inst.AppSlug] = true
+				installationIDs[inst.AppSlug] = inst.ID
 			}
 			for _, slug := range agentSlugs {
-				if installedSet[slug] {
+				if _, ok := installationIDs[slug]; ok {
 					existingSlugs = append(existingSlugs, slug)
 				} else {
 					printer.StepInfo(fmt.Sprintf("App %s not found, skipping", slug))
@@ -1751,16 +1749,21 @@ func runUninstall(ctx context.Context, client forge.Client, printer *ui.Printer,
 
 		if len(existingSlugs) > 0 {
 			printer.Header("App cleanup")
-			printer.StepInfo("Opening browser for each app that needs to be deleted.")
-			printer.StepInfo("Click 'Delete GitHub App' on each page, then return here.")
+			printer.StepInfo("Opening browser for each app installation that needs to be removed.")
+			printer.StepInfo("Click 'Uninstall' on each page, then return here.")
 			printer.Blank()
 
 			for _, slug := range existingSlugs {
-				deleteURL := fmt.Sprintf("https://github.com/organizations/%s/settings/apps/%s/advanced", org, slug)
-				printer.StepStart(fmt.Sprintf("Opening %s settings...", slug))
-				if err := browser.Open(ctx, deleteURL); err != nil {
+				var uninstallURL string
+				if id := installationIDs[slug]; id != 0 {
+					uninstallURL = fmt.Sprintf("https://github.com/organizations/%s/settings/installations/%d", org, id)
+				} else {
+					uninstallURL = fmt.Sprintf("https://github.com/organizations/%s/settings/installations", org)
+				}
+				printer.StepStart(fmt.Sprintf("Opening %s installation settings...", slug))
+				if err := browser.Open(ctx, uninstallURL); err != nil {
 					printer.StepWarn(fmt.Sprintf("Could not open browser: %v", err))
-					printer.StepInfo(fmt.Sprintf("  Delete manually at: %s", deleteURL))
+					printer.StepInfo(fmt.Sprintf("  Uninstall manually at: %s", uninstallURL))
 				} else {
 					printer.StepDone(fmt.Sprintf("Opened %s — %s", slug, deleteURL))
 				}
