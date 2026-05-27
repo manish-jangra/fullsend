@@ -54,6 +54,12 @@ We propose adopting the following **reference workflow** as the mental model for
 
 **Slash commands (illustrative, configurable per repo):**
 
+> **Note:** The bare command names below (`/triage`, `/implement`,
+> `/review`) are illustrative. All production fullsend commands use the
+> `/fs-` prefix (e.g., `/fs-triage`, `/fs-code`, `/fs-review`) to avoid
+> collisions with other AI tools. See
+> [ADR 0042](0042-fs-prefix-for-slash-commands.md).
+
 - `/triage` — run or re-run triage on the issue **from scratch** (clears **`duplicate`** and other triage/ downstream labels at run start; **reopens** the issue if **`closed`**—see **When a triage run starts**)
 - `/implement` — hand off to the **Implementation** stage (implementation agent; expects **`ready-to-implement`** or forces with human ack — policy per repo)
 - `/review` — enqueue review swarm for current PR head
