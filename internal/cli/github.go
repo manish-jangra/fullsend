@@ -884,6 +884,8 @@ func runGitHubUninstall(ctx context.Context, client forge.Client, printer *ui.Pr
 		for _, slug := range agentSlugs {
 			if installedSet[slug] {
 				existingSlugs = append(existingSlugs, slug)
+			} else {
+				printer.StepInfo(fmt.Sprintf("App %s not found, skipping", slug))
 			}
 		}
 	} else {

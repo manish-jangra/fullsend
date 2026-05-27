@@ -517,6 +517,73 @@ func TestRunGitHubSetupPerRepo(t *testing.T) {
 	assert.Contains(t, secretNames, "FULLSEND_GCP_WIF_PROVIDER")
 }
 
+func TestGitHubSetCmd_OrgTargetDefaultsToConfigRepo(t *testing.T) {
+	client := forge.NewFakeClient()
+	printer := ui.New(&discardWriter{})
+
+	err := runGitHubSet(context.Background(), client, printer, "acme", "FULLSEND_GCP_REGION", "us-east5")
+	require.NoError(t, err)
+
+	// Org target should default to .fullsend repo.
+	require.Len(t, client.Variables, 1)
+	assert.Equal(t, "FULLSEND_GCP_REGION", client.Variables[0].Name)
+	assert.Equal(t, "us-east5", client.Variables[0].Value)
+	assert.Equal(t, "acme", client.Variables[0].Owner)
+	assert.Equal(t, forge.ConfigRepoName, client.Variables[0].Repo)
+}
+
+func TestGitHubSetCmd_OrgTargetSecretDefaultsToConfigRepo(t *testing.T) {
+	client := forge.NewFakeClient()
+	printer := ui.New(&discardWriter{})
+
+	err := runGitHubSet(context.Background(), client, printer, "acme", "FULLSEND_GCP_PROJECT_ID", "my-project")
+	require.NoError(t, err)
+
+	require.Len(t, client.CreatedSecrets, 1)
+	assert.Equal(t, "FULLSEND_GCP_PROJECT_ID", client.CreatedSecrets[0].Name)
+	assert.Equal(t, "my-project", client.CreatedSecrets[0].Value)
+	assert.Equal(t, "acme", client.CreatedSecrets[0].Owner)
+	assert.Equal(t, forge.ConfigRepoName, client.CreatedSecrets[0].Repo)
+}
+
+func TestRunGitHubUninstall_ListInstallationsError(t *testing.T) {
+	client := forge.NewFakeClient()
+	client.Repos = []forge.Repository{
+		{Name: ".fullsend", FullName: "acme/.fullsend"},
+	}
+	client.Errors = map[string]error{
+		"ListOrgInstallations": fmt.Errorf("insufficient permissions"),
+	}
+	printer := ui.New(&discardWriter{})
+
+	err := runGitHubUninstall(context.Background(), client, printer, "acme", "fullsend-ai")
+	require.NoError(t, err)
+
+	// Verify repo was still deleted despite ListOrgInstallations failure.
+	assert.Contains(t, client.DeletedRepos, "acme/.fullsend")
+}
+
+func TestParseTarget_MultipleSlashes(t *testing.T) {
+	owner, repo, isRepo := parseTarget("acme/widget/extra")
+	assert.Equal(t, "acme", owner)
+	assert.Equal(t, "widget/extra", repo)
+	assert.True(t, isRepo)
+}
+
+func TestParseTarget_EmptyString(t *testing.T) {
+	owner, repo, isRepo := parseTarget("")
+	assert.Equal(t, "", owner)
+	assert.Equal(t, "", repo)
+	assert.False(t, isRepo)
+}
+
+func TestParseTarget_JustSlash(t *testing.T) {
+	owner, repo, isRepo := parseTarget("/")
+	assert.Equal(t, "", owner)
+	assert.Equal(t, "", repo)
+	assert.True(t, isRepo)
+}
+
 func TestRunGitHubSetupPerRepo_DryRun(t *testing.T) {
 	t.Setenv("GH_TOKEN", "test-token")
 	client := forge.NewFakeClient()
