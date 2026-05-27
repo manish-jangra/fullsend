@@ -44,6 +44,7 @@ Infrastructure platform choice and configuration are specified in the adopting o
 - Repo maintenance: a workflow in `.fullsend` (`.github/workflows/repo-maintenance.yml`) reconciles enrollment shims in target repos when `config.yaml` changes or on manual dispatch. The CLI's `EnrollmentLayer.Install()` dispatches this workflow via `workflow_dispatch` and monitors it for completion, then reports any enrollment PRs created in target repos.
 - Installer scaffold: the `WorkflowsLayer` deploys content from an embedded scaffold (`internal/scaffold/`), keeping deployable files as real files under version control rather than Go string constants.
 - Reusable workflows: agent workflows in `.fullsend` are thin callers (~40-70 lines) that delegate infrastructure logic to upstream reusable workflows (`fullsend-ai/fullsend/.github/workflows/reusable-*.yml`) via `workflow_call`. Infrastructure patches ship once upstream and propagate to all orgs without re-install ([ADR 0031](ADRs/0031-reusable-workflows-for-action-installed-distribution.md)).
+- Event-driven stage dispatch: eliminate `workflow_dispatch` + `gh workflow run` fan-out from `dispatch.yml` in favor of synchronous `workflow_call` so the dispatched run stays linked to the caller ([ADR 0041](ADRs/0041-synchronous-workflow-call-event-dispatch.md)).
 
 **Open questions:**
 
@@ -130,6 +131,10 @@ The mechanism that assigns work to agents and prevents conflicts. Responsible fo
 
 The existing design principle is that [the repo is the coordinator](problems/agent-architecture.md#interaction-model-the-repo-as-coordinator) — branch protection, CODEOWNERS, status checks, and GitHub events provide coordination without a central orchestrator. The agent dispatch and coordination layer may be nothing more than the glue that connects GitHub webhooks to agent infrastructure. Or it may need to be more.
 
+**Decided:**
+
+- Event-driven stage dispatch runs synchronously via `workflow_call` to preserve run correlation in the GitHub Actions UI (see [ADR 0041](ADRs/0041-synchronous-workflow-call-event-dispatch.md)).
+
 **Open questions:**
 
 - Is GitHub's event system sufficient, or do we need additional coordination logic (e.g. to prevent two code agents from picking up the same issue)?
@@ -175,6 +180,7 @@ Observability is a cross-cutting concern that touches every other component. Eac
 **Decided:**
 
 - JSONL reasoning trace exposure: raw JSONL conversation transcripts are extracted from sandboxes and stored with owner-scoped access. Credential scanning acts as an invariant check on [ADR 0017](ADRs/0017-credential-isolation-for-sandboxed-agents.md)'s isolation model. Agents handling data from protected sources beyond the target repo can opt in to JSONL suppression via configuration ([ADR 0021](ADRs/0021-jsonl-reasoning-trace-exposure.md)).
+- Event-driven stage dispatch should remain traceable end-to-end in the GitHub Actions UI by using synchronous `workflow_call` dispatch (see [ADR 0041](ADRs/0041-synchronous-workflow-call-event-dispatch.md)).
 
 **Open questions:**
 

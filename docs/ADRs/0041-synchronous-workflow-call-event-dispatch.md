@@ -1,6 +1,6 @@
 ---
 title: "41. Synchronous workflow_call for event-driven agent dispatch"
-status: Proposed
+status: Accepted
 relates_to:
   - agent-infrastructure
   - operational-observability
@@ -17,7 +17,7 @@ Date: 2026-05-20
 
 ## Status
 
-Proposed
+Accepted
 
 ## Context
 
