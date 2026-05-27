@@ -1720,7 +1720,6 @@ func runUninstall(ctx context.Context, client forge.Client, printer *ui.Printer,
 
 	printer.Blank()
 
-	printer.Header("App uninstall")
 	// Check which apps actually exist before opening browser pages.
 	// We open the org's installation settings page (/organizations/{org}/settings/installations/{id})
 	// rather than the app's own /advanced page, because the /advanced delete button is only
@@ -1729,27 +1728,23 @@ func runUninstall(ctx context.Context, client forge.Client, printer *ui.Printer,
 	if len(agentSlugs) > 0 {
 		// Find which slugs correspond to real installed apps.
 		var existingSlugs []string
-		installationIDs := make(map[string]int)
-		installations, listErr := client.ListOrgInstallations(ctx, org)
+		appIDs := make(map[string]int)
+		appInstallations, listErr := client.ListOrgInstallations(ctx, org)
 		if listErr == nil {
-			for _, inst := range installations {
-				installationIDs[inst.AppSlug] = inst.ID
+			for _, inst := range appInstallations {
+				appIDs[inst.AppSlug] = inst.ID
 			}
 			for _, slug := range agentSlugs {
-				if _, ok := installationIDs[slug]; ok {
+				if _, ok := appIDs[slug]; ok {
 					existingSlugs = append(existingSlugs, slug)
-				} else {
-					printer.StepInfo(fmt.Sprintf("App %s not found, skipping", slug))
 				}
 			}
 		} else {
-			// Can't check — fall back to opening all of them.
-			printer.StepWarn("Could not verify which apps exist; opening all")
 			existingSlugs = agentSlugs
 		}
 
 		if len(existingSlugs) > 0 {
-
+			printer.Header("App uninstall")
 			printer.StepInfo("Opening browser for each app installation that needs to be removed.")
 			printer.StepInfo("Click 'Uninstall' on each page. Press Enter here after each one to continue.")
 			printer.Blank()
@@ -1757,7 +1752,7 @@ func runUninstall(ctx context.Context, client forge.Client, printer *ui.Printer,
 			stdinReader := bufio.NewReader(stdin)
 			for _, slug := range existingSlugs {
 				var uninstallURL string
-				if id := installationIDs[slug]; id != 0 {
+				if id := appIDs[slug]; id != 0 {
 					uninstallURL = fmt.Sprintf("https://github.com/organizations/%s/settings/installations/%d", org, id)
 				} else {
 					uninstallURL = fmt.Sprintf("https://github.com/organizations/%s/settings/installations", org)
@@ -1773,12 +1768,32 @@ func runUninstall(ctx context.Context, client forge.Client, printer *ui.Printer,
 				if _, err := stdinReader.ReadString('\n'); err != nil && !errors.Is(err, io.EOF) {
 					return fmt.Errorf("reading confirmation: %w", err)
 				}
-				printer.StepDone(fmt.Sprintf("%s uninstalled", slug))
 			}
 			printer.Blank()
+
+			printer.StepStart("Verifying if apps were removed")
+			freshInstalls, verifyErr := client.ListOrgInstallations(ctx, org)
+			if verifyErr != nil {
+				printer.StepWarn(fmt.Sprintf("Could not get installations for org %s: %v", org, verifyErr))
+			} else {
+				stillInstalledSlugs := []string{}
+				for _, slug := range existingSlugs {
+					for _, inst := range freshInstalls {
+						if inst.AppSlug == slug {
+							stillInstalledSlugs = append(stillInstalledSlugs, inst.AppSlug)
+						}
+					}
+				}
+
+				if len(stillInstalledSlugs) != 0 {
+					printer.StepWarn(fmt.Sprintf("Some fullsend apps are still installed — uninstall manually at: %s", fmt.Sprintf("https://github.com/organizations/%s/settings/installations", org)))
+				} else {
+					printer.StepDone("Apps were uninstalled")
+				}
+			}
 		} else if listErr == nil {
 			printer.StepWarn("No fullsend apps found installed in this organization.")
-			printer.StepInfo("If apps were created under a custom --app-set prefix, re-run with that prefix.")
+			printer.StepWarn("If apps were created under a custom --app-set prefix, re-run with that prefix.")
 		}
 	}
 
