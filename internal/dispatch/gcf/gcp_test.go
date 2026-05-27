@@ -175,7 +175,13 @@ func TestLiveGCFClient_CreateWIFProvider(t *testing.T) {
 				audiences := oidc["allowedAudiences"].([]interface{})
 				assert.Equal(t, []interface{}{"fullsend-mint", "https://iam.googleapis.com/projects/123/locations/global/workloadIdentityPools/pool/providers/gh-oidc"}, audiences)
 				w.WriteHeader(http.StatusOK)
-				fmt.Fprintln(w, `{}`)
+				fmt.Fprintln(w, `{"name":"operations/update-op","done":true}`)
+			case 4:
+				// enableWIFProvider — re-enables the provider after conflict recovery.
+				assert.Equal(t, http.MethodPatch, r.Method)
+				assert.Contains(t, r.URL.RawQuery, "disabled")
+				w.WriteHeader(http.StatusOK)
+				fmt.Fprintln(w, `{"name":"operations/enable-op","done":true}`)
 			}
 		}))
 		defer srv.Close()
@@ -185,7 +191,7 @@ func TestLiveGCFClient_CreateWIFProvider(t *testing.T) {
 			AllowedAudiences:   []string{"fullsend-mint", "https://iam.googleapis.com/projects/123/locations/global/workloadIdentityPools/pool/providers/gh-oidc"},
 		})
 		require.NoError(t, err)
-		assert.Equal(t, 3, callCount)
+		assert.Equal(t, 4, callCount)
 	})
 }
 
