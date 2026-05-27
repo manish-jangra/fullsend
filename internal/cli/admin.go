@@ -118,9 +118,9 @@ type skipMintDispatcher struct {
 	mintURL string
 }
 
-func (d *skipMintDispatcher) Name() string                        { return "skip-mint-check" }
-func (d *skipMintDispatcher) OrgSecretNames() []string            { return nil }
-func (d *skipMintDispatcher) OrgVariableNames() []string          { return []string{"FULLSEND_MINT_URL"} }
+func (d *skipMintDispatcher) Name() string               { return "skip-mint-check" }
+func (d *skipMintDispatcher) OrgSecretNames() []string   { return nil }
+func (d *skipMintDispatcher) OrgVariableNames() []string { return []string{"FULLSEND_MINT_URL"} }
 func (d *skipMintDispatcher) StoreAgentPEM(context.Context, string, string, []byte) error {
 	return nil
 }
@@ -129,23 +129,23 @@ func (d *skipMintDispatcher) Provision(context.Context) (map[string]string, erro
 }
 
 type perRepoInstallConfig struct {
-	RepoFullName        string
-	Agents              string
-	MintURL             string
-	InferenceRegion     string
-	InferenceProject    string
+	RepoFullName         string
+	Agents               string
+	MintURL              string
+	InferenceRegion      string
+	InferenceProject     string
 	InferenceWIFProvider string
-	MintProject         string
-	MintRegion          string
-	DryRun              bool
-	SkipAppSetup        bool
-	PublicApps          bool
-	MintProvider        string
-	MintSourceDir       string
-	MintSkipDeploy      bool
-	SkipMintCheck       bool
-	AppSet              string
-	VendorBinary        bool
+	MintProject          string
+	MintRegion           string
+	DryRun               bool
+	SkipAppSetup         bool
+	PublicApps           bool
+	MintProvider         string
+	MintSourceDir        string
+	MintSkipDeploy       bool
+	SkipMintCheck        bool
+	AppSet               string
+	VendorBinary         bool
 }
 
 // wifProviderPattern validates the full WIF provider resource name format
@@ -283,23 +283,23 @@ Inference authentication:
 					perRepoMintProject = inferenceProject
 				}
 				return runPerRepoInstall(cmd.Context(), perRepoInstallConfig{
-					RepoFullName:        arg,
-					Agents:              perRepoAgents,
-					MintURL:             mintURL,
-					InferenceRegion:     inferenceRegion,
-					InferenceProject:    inferenceProject,
+					RepoFullName:         arg,
+					Agents:               perRepoAgents,
+					MintURL:              mintURL,
+					InferenceRegion:      inferenceRegion,
+					InferenceProject:     inferenceProject,
 					InferenceWIFProvider: inferenceWIFProvider,
-					MintProject:         perRepoMintProject,
-					MintRegion:          mintRegion,
-					DryRun:              dryRun,
-					SkipAppSetup:        skipAppSetup,
-					PublicApps:          publicApps,
-					MintProvider:        mintProvider,
-					MintSourceDir:       mintSourceDir,
-					MintSkipDeploy:      mintSkipDeploy,
-					SkipMintCheck:       skipMintCheck,
-					AppSet:              appSet,
-					VendorBinary:        vendorBinary,
+					MintProject:          perRepoMintProject,
+					MintRegion:           mintRegion,
+					DryRun:               dryRun,
+					SkipAppSetup:         skipAppSetup,
+					PublicApps:           publicApps,
+					MintProvider:         mintProvider,
+					MintSourceDir:        mintSourceDir,
+					MintSkipDeploy:       mintSkipDeploy,
+					SkipMintCheck:        skipMintCheck,
+					AppSet:               appSet,
+					VendorBinary:         vendorBinary,
 				})
 			}
 
@@ -1720,6 +1720,7 @@ func runUninstall(ctx context.Context, client forge.Client, printer *ui.Printer,
 
 	printer.Blank()
 
+	printer.Header("App uninstall")
 	// Check which apps actually exist before opening browser pages.
 	// We open the org's installation settings page (/organizations/{org}/settings/installations/{id})
 	// rather than the app's own /advanced page, because the /advanced delete button is only
@@ -1748,7 +1749,7 @@ func runUninstall(ctx context.Context, client forge.Client, printer *ui.Printer,
 		}
 
 		if len(existingSlugs) > 0 {
-			printer.Header("App cleanup")
+
 			printer.StepInfo("Opening browser for each app installation that needs to be removed.")
 			printer.StepInfo("Click 'Uninstall' on each page. Press Enter here after each one to continue.")
 			printer.Blank()
