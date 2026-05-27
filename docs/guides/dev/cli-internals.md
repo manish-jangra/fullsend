@@ -6,23 +6,51 @@ This guide provides implementation details for fullsend CLI internals: command s
 
 ```
 fullsend
-├── admin
-│   ├── install     # Per-org or per-repo infrastructure setup
-│   ├── uninstall   # Tear down infrastructure (reverse layer order)
-│   ├── analyze     # Health check: inspect installed state
+├── admin                                    # All-in-one setup (GCP + GitHub)
+│   ├── install      <org|owner/repo>        # Full infrastructure setup
+│   ├── uninstall    <org>                   # Tear down (reverse layer order)
+│   ├── analyze      <org>                   # Health check installed state
 │   ├── enable
-│   │   └── repos   # Enable agent on repos (per-org mode)
+│   │   └── repos    <org> [repo...]         # Enable agent on repos
 │   └── disable
-│       └── repos   # Disable agent on repos (per-org mode)
-├── run             # Execute an agent in a sandbox
-├── scan            # Run security scanner on input/output
-│   ├── input       # Scan event payload for prompt injection
-│   ├── output      # Scan agent output for secrets
-│   ├── context     # Scan context files for injection
-│   └── url         # Validate URLs for SSRF
-├── post-review     # Post PR review comments to GitHub
-└── post-comment    # Post issue/PR comments to GitHub
+│       └── repos    <org> [repo...]         # Disable agent on repos
+├── mint                                     # GCP: token mint management
+│   ├── deploy                               # Deploy/update mint Cloud Function
+│   ├── enroll       <org|owner/repo>        # Register org/repo in mint
+│   ├── unenroll     <org|owner/repo>        # Remove org/repo from mint
+│   └── status       [org]                   # Inspect mint state and PEM health
+├── inference                                # GCP: inference WIF management
+│   ├── provision    <org|owner/repo>        # Create WIF pool/provider for Agent Platform
+│   └── status       <org|owner/repo>        # Check WIF health, print config
+├── github                                   # GitHub-only configuration
+│   ├── setup        <org|owner/repo>        # Configure fullsend (no GCP needed)
+│   ├── enroll       <org> [repo...]         # Enable repos for agent workflows
+│   ├── unenroll     <org> [repo...]         # Disable repos from agent workflows
+│   ├── set          <target> <key> <value>  # Update a config value
+│   ├── status       <org>                   # Analyze GitHub-side state
+│   ├── uninstall    <org>                   # Remove fullsend GitHub configuration
+│   └── sync-scaffold <org>                  # Update workflow templates
+├── run                                      # Execute an agent in a sandbox
+├── scan                                     # Run security scanner on input/output
+│   ├── input                                # Scan event payload for prompt injection
+│   ├── output                               # Scan agent output for leaked secrets
+│   ├── context                              # Scan context files for prompt injection
+│   └── url                                  # Validate URLs against SSRF attacks
+├── post-review                              # Post PR review comments to GitHub
+└── post-comment                             # Post issue/PR comments to GitHub
 ```
+
+### Command Decomposition
+
+The `admin install` command performs all setup in a single invocation. The `mint`, `inference`, and `github` subcommands break this into role-specific operations for organizations that separate GCP and GitHub responsibilities:
+
+| `admin install` Phase | Standalone Command | Required Access |
+|-----------------------|--------------------|-----------------|
+| Phases 1-3: Mint provisioning | `fullsend mint deploy` + `fullsend mint enroll` | GCP project (mint) |
+| Phase 4: WIF provisioning | `fullsend inference provision` | GCP project (inference) |
+| Phases 5-7: GitHub setup + enrollment | `fullsend github setup` | GitHub only |
+
+The typical handoff: a GCP admin runs `mint deploy` and `inference provision`, then passes the mint URL and WIF provider resource name to a GitHub maintainer who runs `github setup --mint-url=... --inference-wif-provider=...`. See [Setting up with pre-provisioned infrastructure](../admin/github-setup.md).
 
 ### Token Resolution Chain
 
@@ -448,6 +476,9 @@ var executableFiles = map[string]struct{}{
 |------|-------|---------|
 | `internal/cli/root.go` | ~34 | CLI entry point, command registration |
 | `internal/cli/admin.go` | ~2415 | Install/uninstall/analyze/enable/disable |
+| `internal/cli/mint.go` | ~1022 | Mint deploy/enroll/unenroll/status |
+| `internal/cli/inference.go` | ~408 | Inference WIF provision/status |
+| `internal/cli/github.go` | ~966 | GitHub setup/set/status/uninstall/sync-scaffold/enroll/unenroll |
 | `internal/cli/run.go` | ~1923 | Agent execution lifecycle |
 | `internal/mint/main.go` | ~906 | GCF token mint service |
 | `internal/dispatch/gcf/provisioner.go` | ~1350 | GCP infrastructure provisioner |
@@ -459,11 +490,12 @@ var executableFiles = map[string]struct{}{
 | `internal/layers/dispatch.go` | ~364 | Mint URL deployment layer |
 | `internal/scaffold/scaffold.go` | ~146 | Embedded template system |
 | `internal/inference/inference.go` | ~26 | Provider interface |
-| `internal/inference/vertex/vertex.go` | ~80 | Vertex AI implementation |
+| `internal/inference/vertex/vertex.go` | ~80 | Agent Platform (Vertex AI) implementation |
 | `internal/config/config.go` | ~264 | Org/repo config structures |
 
 ## See Also
 
-- [Local Development](local-dev.md) - Development environment setup
-- [Infrastructure Reference](../admin/infrastructure-reference.md) - Admin infrastructure details
-- [Customizing Agents](../user/customizing-agents.md) - User customization guide
+- [Local Development](local-dev.md) — Development environment setup
+- [Setting up with pre-provisioned infrastructure](../admin/github-setup.md) — GitHub-only setup guide
+- [Infrastructure Reference](../admin/infrastructure-reference.md) — Admin infrastructure details
+- [Customizing Agents](../user/customizing-agents.md) — User customization guide

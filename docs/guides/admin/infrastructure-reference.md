@@ -4,6 +4,8 @@ This guide provides implementation details for fullsend's infrastructure compone
 
 ## Token Mint (OIDC) — GCF Cloud Function
 
+> Managed by: `fullsend mint deploy`, `fullsend mint enroll`, `fullsend mint unenroll`, `fullsend mint status`
+
 The mint is a GCP Cloud Function that exchanges GitHub OIDC tokens for scoped GitHub App installation tokens. This eliminates long-lived PATs from the system.
 
 ### Mint Architecture
@@ -102,9 +104,11 @@ A single mint instance can serve multiple orgs:
 
 ---
 
-## Inference — Vertex AI with Workload Identity Federation
+## Inference — Agent Platform with Workload Identity Federation
 
-Inference authentication uses GCP Workload Identity Federation (WIF) to allow GitHub Actions to authenticate to Vertex AI without service account keys.
+> Managed by: `fullsend inference provision`, `fullsend inference status`
+
+Inference authentication uses GCP Workload Identity Federation (WIF) to allow GitHub Actions to authenticate to Agent Platform without service account keys.
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
@@ -140,7 +144,7 @@ Inference authentication uses GCP Workload Identity Federation (WIF) to allow Gi
 │             │                                               │
 │             ▼                                               │
 │  ┌─────────────────────────────────┐                        │
-│  │ Vertex AI API                   │                        │
+│  │ Agent Platform API              │                        │
 │  │                                 │                        │
 │  │ Project: FULLSEND_GCP_PROJECT_ID│                        │
 │  │ Region:  FULLSEND_GCP_REGION    │                        │
@@ -167,6 +171,8 @@ During installation, the GCF provisioner creates:
 ---
 
 ## GitHub Secrets & Variables Deployment
+
+> Individual values can be updated with `fullsend github set <target> <key> <value>`. See [Setting up with pre-provisioned infrastructure](github-setup.md) for the full GitHub management guide.
 
 Secrets and variables are deployed at different scopes depending on the installation mode.
 
@@ -244,9 +250,9 @@ The GCF provisioner handles full GCP infrastructure deployment:
 │  └─────────┬─────────┘                                          │
 │            ▼                                                    │
 │  ┌───────────────────┐                                          │
-│  │ Grant Vertex AI   │ roles/aiplatform.user                    │
-│  │ access to         │ on the inference project                 │
-│  │ federated IDs     │                                          │
+│  │ Grant Agent       │ roles/aiplatform.user                    │
+│  │ Platform access   │ on the inference project                 │
+│  │ to federated IDs  │                                          │
 │  └─────────┬─────────┘                                          │
 │            ▼                                                    │
 │  ┌───────────────────┐                                          │
@@ -284,5 +290,6 @@ The GCF provisioner avoids redundant Cloud Function deployments by computing a S
 
 ## See Also
 
-- [Installation Guide](installation.md) - Step-by-step setup instructions
-- [Local Development](../dev/local-dev.md) - Developer setup
+- [Installation Guide](installation.md) — All-in-one setup instructions
+- [Setting up with pre-provisioned infrastructure](github-setup.md) — GitHub-only setup guide
+- [Local Development](../dev/local-dev.md) — Developer setup
