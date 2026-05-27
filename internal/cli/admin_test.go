@@ -1605,10 +1605,10 @@ func TestInstallCmd_PerRepoAcceptsValidWIFProvider(t *testing.T) {
 
 func TestFilterSlugsByAppSet(t *testing.T) {
 	tests := []struct {
-		name string
+		name   string
 		appSet string
-		slugs map[string]string
-		want  map[string]string
+		slugs  map[string]string
+		want   map[string]string
 	}{
 		{
 			name:   "matching app-set preserved",
