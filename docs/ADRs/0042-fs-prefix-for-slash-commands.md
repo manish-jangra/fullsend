@@ -1,5 +1,5 @@
 ---
-title: "40. Use /fs- prefix for all slash commands"
+title: "42. Use /fs- prefix for all slash commands"
 status: Accepted
 relates_to:
   - agent-architecture
@@ -9,7 +9,7 @@ topics:
   - ux
 ---
 
-# 40. Use /fs- prefix for all slash commands
+# 42. Use /fs- prefix for all slash commands
 
 Date: 2026-05-26
 
