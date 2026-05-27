@@ -1134,7 +1134,7 @@ func newUninstallCmd() *cobra.Command {
 			if os.Getenv("CI") != "" {
 				browser = appsetup.NopBrowser{}
 			}
-			return runUninstall(ctx, client, printer, org, appSet, browser)
+			return runUninstall(ctx, client, printer, org, appSet, browser, os.Stdin)
 		},
 	}
 
@@ -1631,7 +1631,7 @@ func runInstall(ctx context.Context, client forge.Client, printer *ui.Printer, o
 }
 
 // runUninstall tears down the fullsend installation.
-func runUninstall(ctx context.Context, client forge.Client, printer *ui.Printer, org, appSet string, browser appsetup.BrowserOpener) error {
+func runUninstall(ctx context.Context, client forge.Client, printer *ui.Printer, org, appSet string, browser appsetup.BrowserOpener, stdin io.Reader) error {
 	// Try to load agent slugs from existing config. If the .fullsend repo
 	// is already gone (e.g., previous partial uninstall), fall back to the
 	// default naming convention so we can still guide the user to delete
@@ -1750,9 +1750,10 @@ func runUninstall(ctx context.Context, client forge.Client, printer *ui.Printer,
 		if len(existingSlugs) > 0 {
 			printer.Header("App cleanup")
 			printer.StepInfo("Opening browser for each app installation that needs to be removed.")
-			printer.StepInfo("Click 'Uninstall' on each page, then return here.")
+			printer.StepInfo("Click 'Uninstall' on each page. Press Enter here after each one to continue.")
 			printer.Blank()
 
+			stdinReader := bufio.NewReader(stdin)
 			for _, slug := range existingSlugs {
 				var uninstallURL string
 				if id := installationIDs[slug]; id != 0 {
@@ -1765,8 +1766,13 @@ func runUninstall(ctx context.Context, client forge.Client, printer *ui.Printer,
 					printer.StepWarn(fmt.Sprintf("Could not open browser: %v", err))
 					printer.StepInfo(fmt.Sprintf("  Uninstall manually at: %s", uninstallURL))
 				} else {
-					printer.StepDone(fmt.Sprintf("Opened %s — %s", slug, deleteURL))
+					printer.StepDone(fmt.Sprintf("Opened %s — %s", slug, uninstallURL))
 				}
+				printer.StepInfo(fmt.Sprintf("Press Enter once %s is uninstalled...", slug))
+				if _, err := stdinReader.ReadString('\n'); err != nil && !errors.Is(err, io.EOF) {
+					return fmt.Errorf("reading confirmation: %w", err)
+				}
+				printer.StepDone(fmt.Sprintf("%s uninstalled", slug))
 			}
 			printer.Blank()
 		} else if listErr == nil {
