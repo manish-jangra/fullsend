@@ -79,7 +79,7 @@ if [[ "${BYTE_COUNT}" -gt 1 ]]; then
     # Extract SHA from current section only (before sticky history sentinels)
     CURRENT_SECTION="$(awk '/<!-- sticky:history-start -->/{exit} {print}' "${PRIOR_FILE}")"
     PRIOR_SHA="$(echo "${CURRENT_SECTION}" \
-        | grep -oP '(?<=\*\*Head SHA:\*\* )[0-9a-f]{7,64}' | head -1)"
+        | grep -oP '(?<=\*\*Head SHA:\*\* )[0-9a-f]{7,64}' | head -1 || true)"
     echo "prior_sha=${PRIOR_SHA}" >> "${GITHUB_OUTPUT}"
     echo "Prior review SHA: ${PRIOR_SHA:-none}"
 else
