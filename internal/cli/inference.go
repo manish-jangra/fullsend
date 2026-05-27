@@ -113,7 +113,7 @@ WIF pools are always created at locations/global.`,
 }
 
 func runInferenceProvisionDryRun(cmd *cobra.Command, printer *ui.Printer, org, repo, project, pool, provider string) error {
-	printer.Banner()
+	printer.Banner(Version())
 	printer.Blank()
 
 	if repo != "" {
@@ -146,7 +146,7 @@ func runInferenceProvisionDryRun(cmd *cobra.Command, printer *ui.Printer, org, r
 }
 
 func runInferenceProvision(cmd *cobra.Command, printer *ui.Printer, org, repo, project, pool, provider string) error {
-	printer.Banner()
+	printer.Banner(Version())
 	printer.Blank()
 
 	if repo != "" {
@@ -343,7 +343,7 @@ func outputStatus(cmd *cobra.Command, result *inferenceStatusResult, format stri
 		fmt.Fprint(cmd.OutOrStdout(), formatStatusEnv(result))
 	default:
 		printer := ui.New(cmd.OutOrStdout())
-		printer.Banner()
+		printer.Banner(Version())
 		printer.Blank()
 		printer.Header("Inference Status")
 		printer.Blank()
@@ -373,10 +373,12 @@ func outputStatus(cmd *cobra.Command, result *inferenceStatusResult, format stri
 		}
 	}
 
-	if result.Status != "healthy" {
+	switch result.Status {
+	case "healthy", "not_provisioned":
+		return nil
+	default:
 		return fmt.Errorf("inference status: %s", result.Status)
 	}
-	return nil
 }
 
 func formatStatusJSON(result *inferenceStatusResult) (string, error) {
