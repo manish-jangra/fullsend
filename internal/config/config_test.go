@@ -20,6 +20,19 @@ func TestValidRoles(t *testing.T) {
 	assert.Contains(t, roles, "prioritize")
 }
 
+func TestPerRepoDefaultRoles(t *testing.T) {
+	roles := PerRepoDefaultRoles()
+	assert.Len(t, roles, 6)
+	assert.Contains(t, roles, "triage")
+	assert.Contains(t, roles, "coder")
+	assert.Contains(t, roles, "review")
+	assert.Contains(t, roles, "fix")
+	assert.Contains(t, roles, "retro")
+	assert.Contains(t, roles, "prioritize")
+	// "fullsend" dispatch role must be excluded in per-repo mode.
+	assert.NotContains(t, roles, "fullsend")
+}
+
 func TestNewOrgConfig(t *testing.T) {
 	allRepos := []string{"repo-a", "repo-b", "repo-c"}
 	enabledRepos := []string{"repo-a", "repo-c"}
