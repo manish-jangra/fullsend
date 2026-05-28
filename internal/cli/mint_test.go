@@ -107,9 +107,9 @@ func TestMintEnrollCmd_Flags(t *testing.T) {
 	require.NotNil(t, regionFlag, "expected --region flag")
 	assert.Equal(t, "us-central1", regionFlag.DefValue)
 
-	sourceOrgFlag := cmd.Flags().Lookup("source-org")
-	require.NotNil(t, sourceOrgFlag, "expected --source-org flag")
-	assert.Equal(t, "fullsend-ai", sourceOrgFlag.DefValue)
+	appSetFlag := cmd.Flags().Lookup("app-set")
+	require.NotNil(t, appSetFlag, "expected --app-set flag")
+	assert.Equal(t, "fullsend-ai", appSetFlag.DefValue)
 
 	roleAppIDsFlag := cmd.Flags().Lookup("role-app-ids")
 	require.NotNil(t, roleAppIDsFlag, "expected --role-app-ids flag")
@@ -273,7 +273,7 @@ func TestResolveEnrollAppIDs_ExplicitJSON(t *testing.T) {
 	result, err := resolveEnrollAppIDs(
 		`{"coder":"111","triage":"222"}`,
 		nil,
-		"source-org",
+		"my-app-set",
 		"target-org",
 		[]string{"coder", "triage"},
 	)
@@ -286,7 +286,7 @@ func TestResolveEnrollAppIDs_ExplicitJSON_InvalidJSON(t *testing.T) {
 	_, err := resolveEnrollAppIDs(
 		`{invalid`,
 		nil,
-		"source-org",
+		"my-app-set",
 		"target-org",
 		[]string{"coder"},
 	)
@@ -294,15 +294,15 @@ func TestResolveEnrollAppIDs_ExplicitJSON_InvalidJSON(t *testing.T) {
 	assert.Contains(t, err.Error(), "parsing --role-app-ids")
 }
 
-func TestResolveEnrollAppIDs_FromSourceOrg(t *testing.T) {
+func TestResolveEnrollAppIDs_FromAppSet(t *testing.T) {
 	existing := map[string]string{
-		"source-org/coder":  "111",
-		"source-org/triage": "222",
+		"my-app-set/coder":  "111",
+		"my-app-set/triage": "222",
 	}
 	result, err := resolveEnrollAppIDs(
 		"",
 		existing,
-		"source-org",
+		"my-app-set",
 		"target-org",
 		[]string{"coder", "triage"},
 	)
@@ -313,13 +313,13 @@ func TestResolveEnrollAppIDs_FromSourceOrg(t *testing.T) {
 
 func TestResolveEnrollAppIDs_TargetAlreadyRegistered(t *testing.T) {
 	existing := map[string]string{
-		"source-org/coder": "111",
+		"my-app-set/coder": "111",
 		"target-org/coder": "999",
 	}
 	result, err := resolveEnrollAppIDs(
 		"",
 		existing,
-		"source-org",
+		"my-app-set",
 		"target-org",
 		[]string{"coder"},
 	)
@@ -331,7 +331,7 @@ func TestResolveEnrollAppIDs_NoExistingIDs(t *testing.T) {
 	_, err := resolveEnrollAppIDs(
 		"",
 		nil,
-		"source-org",
+		"my-app-set",
 		"target-org",
 		[]string{"coder"},
 	)
@@ -339,20 +339,32 @@ func TestResolveEnrollAppIDs_NoExistingIDs(t *testing.T) {
 	assert.Contains(t, err.Error(), "no existing ROLE_APP_IDS")
 }
 
-func TestResolveEnrollAppIDs_RoleMissingFromSource(t *testing.T) {
+func TestResolveEnrollAppIDs_RoleMissingFromAppSet(t *testing.T) {
 	existing := map[string]string{
-		"source-org/coder": "111",
+		"my-app-set/coder": "111",
 	}
 	_, err := resolveEnrollAppIDs(
 		"",
 		existing,
-		"source-org",
+		"my-app-set",
 		"target-org",
 		[]string{"coder", "unknown-role"},
 	)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "unknown-role")
-	assert.Contains(t, err.Error(), "not found in source org")
+	assert.Contains(t, err.Error(), "not found in app set")
+}
+
+func TestResolveEnrollAppIDs_SelfEnroll(t *testing.T) {
+	result, err := resolveEnrollAppIDs(
+		"",
+		map[string]string{"my-app-set/coder": "111"},
+		"my-app-set",
+		"my-app-set",
+		[]string{"coder"},
+	)
+	require.NoError(t, err)
+	assert.Equal(t, "111", result["my-app-set/coder"], "self-enroll should reuse existing entry")
 }
 
 // --- confirmUnenroll tests ---

@@ -14,6 +14,7 @@ import (
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
 
+	"github.com/fullsend-ai/fullsend/internal/appsetup"
 	"github.com/fullsend-ai/fullsend/internal/config"
 	"github.com/fullsend-ai/fullsend/internal/dispatch/gcf"
 	"github.com/fullsend-ai/fullsend/internal/ui"
@@ -159,7 +160,7 @@ func newMintDeployCmd() *cobra.Command {
 func newMintEnrollCmd() *cobra.Command {
 	var project string
 	var region string
-	var sourceOrg string
+	var appSet string
 	var roleAppIDs string
 	var roles string
 	var dryRun bool
@@ -170,7 +171,7 @@ func newMintEnrollCmd() *cobra.Command {
 		Long: `Performs full enrollment of an organization or per-repo into an existing mint.
 
 Per-org enrollment (fullsend mint enroll acme):
-  - Copies PEM secrets from the source org
+  - Copies PEM secrets from the app set
   - Registers the org in ALLOWED_ORGS and ROLE_APP_IDS
   - Re-derives ALLOWED_ROLES
 
@@ -204,16 +205,16 @@ Per-repo enrollment (fullsend mint enroll acme/widget):
 			printer.Blank()
 
 			if strings.Contains(arg, "/") {
-				return runMintEnrollRepo(ctx, printer, arg, project, region, sourceOrg, roleAppIDs, roleList, dryRun)
+				return runMintEnrollRepo(ctx, printer, arg, project, region, appSet, roleAppIDs, roleList, dryRun)
 			}
-			return runMintEnrollOrg(ctx, printer, arg, project, region, sourceOrg, roleAppIDs, roleList, dryRun)
+			return runMintEnrollOrg(ctx, printer, arg, project, region, appSet, roleAppIDs, roleList, dryRun)
 		},
 	}
 
 	cmd.Flags().StringVar(&project, "project", "", "GCP project ID (required)")
 	cmd.Flags().StringVar(&region, "region", "us-central1", "GCP region")
-	cmd.Flags().StringVar(&sourceOrg, "source-org", "fullsend-ai", "org to copy PEMs and app IDs from")
-	cmd.Flags().StringVar(&roleAppIDs, "role-app-ids", "", "explicit JSON map of role app IDs (overrides --source-org)")
+	cmd.Flags().StringVar(&appSet, "app-set", appsetup.DefaultAppSet, "app set to copy PEMs and app IDs from")
+	cmd.Flags().StringVar(&roleAppIDs, "role-app-ids", "", "explicit JSON map of role app IDs (overrides --app-set)")
 	cmd.Flags().StringVar(&roles, "roles", strings.Join(defaultMintRoles(), ","), "comma-separated roles to enroll")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "preview changes without making them")
 
@@ -240,20 +241,20 @@ func parseAndResolveRoles(rolesStr string) ([]string, error) {
 	return resolved, nil
 }
 
-func runMintEnrollOrg(ctx context.Context, printer *ui.Printer, org, project, region, sourceOrg, roleAppIDsJSON string, roleList []string, dryRun bool) error {
+func runMintEnrollOrg(ctx context.Context, printer *ui.Printer, org, project, region, appSet, roleAppIDsJSON string, roleList []string, dryRun bool) error {
 	org = strings.ToLower(org)
-	sourceOrg = strings.ToLower(sourceOrg)
+	appSet = strings.ToLower(appSet)
 	if err := validateOrgName(org); err != nil {
 		return err
 	}
 	if org == gcf.PlaceholderOrg {
 		return fmt.Errorf("cannot enroll reserved placeholder org %q", org)
 	}
-	if err := validateOrgName(sourceOrg); err != nil {
-		return fmt.Errorf("invalid --source-org: %w", err)
+	if err := appsetup.ValidateAppSet(appSet); err != nil {
+		return fmt.Errorf("invalid --app-set: %w", err)
 	}
-	if org == sourceOrg {
-		return fmt.Errorf("target org %q is the same as --source-org; nothing to enroll", org)
+	if org == appSet {
+		return fmt.Errorf("target org %q is the same as --app-set; nothing to enroll", org)
 	}
 
 	printer.Header("Enrolling org " + org + " in mint")
@@ -276,7 +277,7 @@ func runMintEnrollOrg(ctx context.Context, printer *ui.Printer, org, project, re
 	printer.StepDone(fmt.Sprintf("Found mint at %s", discovery.URL))
 
 	// Step 2: Resolve role->app-id mappings.
-	appIDs, err := resolveEnrollAppIDs(roleAppIDsJSON, discovery.RoleAppIDs, sourceOrg, org, roleList)
+	appIDs, err := resolveEnrollAppIDs(roleAppIDsJSON, discovery.RoleAppIDs, appSet, org, roleList)
 	if err != nil {
 		return fmt.Errorf("resolving app IDs: %w", err)
 	}
@@ -292,13 +293,13 @@ func runMintEnrollOrg(ctx context.Context, printer *ui.Printer, org, project, re
 			}
 		}
 		printer.StepInfo(fmt.Sprintf("  Would add %s to ALLOWED_ORGS", org))
-		printer.StepInfo(fmt.Sprintf("  Would copy PEMs from %s for %d roles", sourceOrg, len(roleList)))
+		printer.StepInfo(fmt.Sprintf("  Would copy PEMs from %s for %d roles", appSet, len(roleList)))
 		printer.Blank()
 		printer.StepInfo("To grant Agent Platform access, run 'fullsend inference provision' separately")
 		return nil
 	}
 
-	// Step 3: Copy PEM secrets from source org.
+	// Step 3: Copy PEM secrets from app set.
 	for _, role := range roleList {
 		exists, existsErr := provisioner.SecretExists(ctx, org, role)
 		if existsErr != nil {
@@ -308,8 +309,8 @@ func runMintEnrollOrg(ctx context.Context, printer *ui.Printer, org, project, re
 			printer.StepDone(fmt.Sprintf("PEM exists: %s/%s", org, role))
 			continue
 		}
-		printer.StepStart(fmt.Sprintf("Copying PEM for %s/%s from %s", org, role, sourceOrg))
-		if err := provisioner.CopyAgentPEM(ctx, sourceOrg, org, role); err != nil {
+		printer.StepStart(fmt.Sprintf("Copying PEM for %s/%s from %s", org, role, appSet))
+		if err := provisioner.CopyAgentPEM(ctx, appSet, org, role); err != nil {
 			printer.StepFail(fmt.Sprintf("Failed to copy PEM for %s", role))
 			return fmt.Errorf("copying PEM for %s/%s: %w", org, role, err)
 		}
@@ -336,10 +337,10 @@ func runMintEnrollOrg(ctx context.Context, printer *ui.Printer, org, project, re
 	return nil
 }
 
-func runMintEnrollRepo(ctx context.Context, printer *ui.Printer, repoFullName, project, region, sourceOrg, roleAppIDsJSON string, roleList []string, dryRun bool) error {
-	sourceOrg = strings.ToLower(sourceOrg)
-	if err := validateOrgName(sourceOrg); err != nil {
-		return fmt.Errorf("invalid --source-org: %w", err)
+func runMintEnrollRepo(ctx context.Context, printer *ui.Printer, repoFullName, project, region, appSet, roleAppIDsJSON string, roleList []string, dryRun bool) error {
+	appSet = strings.ToLower(appSet)
+	if err := appsetup.ValidateAppSet(appSet); err != nil {
+		return fmt.Errorf("invalid --app-set: %w", err)
 	}
 	repoFullName = strings.ToLower(repoFullName)
 	parts := strings.SplitN(repoFullName, "/", 2)
@@ -378,7 +379,7 @@ func runMintEnrollRepo(ctx context.Context, printer *ui.Printer, repoFullName, p
 	printer.StepDone(fmt.Sprintf("Found mint at %s", discovery.URL))
 
 	// Step 2: Resolve role->app-id mappings.
-	appIDs, err := resolveEnrollAppIDs(roleAppIDsJSON, discovery.RoleAppIDs, sourceOrg, owner, roleList)
+	appIDs, err := resolveEnrollAppIDs(roleAppIDsJSON, discovery.RoleAppIDs, appSet, owner, roleList)
 	if err != nil {
 		return fmt.Errorf("resolving app IDs: %w", err)
 	}
@@ -394,7 +395,7 @@ func runMintEnrollRepo(ctx context.Context, printer *ui.Printer, repoFullName, p
 			}
 		}
 		printer.StepInfo(fmt.Sprintf("  Would add %s to ALLOWED_ORGS", owner))
-		printer.StepInfo(fmt.Sprintf("  Would copy PEMs from %s for %d roles", sourceOrg, len(roleList)))
+		printer.StepInfo(fmt.Sprintf("  Would copy PEMs from %s for %d roles", appSet, len(roleList)))
 		printer.StepInfo(fmt.Sprintf("  Would add %s to PER_REPO_WIF_REPOS", repoFullName))
 		printer.StepInfo(fmt.Sprintf("  Would create WIF provider: %s", gcf.BuildRepoProviderID(owner, repo)))
 		return nil
@@ -410,8 +411,8 @@ func runMintEnrollRepo(ctx context.Context, printer *ui.Printer, repoFullName, p
 			printer.StepDone(fmt.Sprintf("PEM exists: %s/%s", owner, role))
 			continue
 		}
-		printer.StepStart(fmt.Sprintf("Copying PEM for %s/%s from %s", owner, role, sourceOrg))
-		if err := provisioner.CopyAgentPEM(ctx, sourceOrg, owner, role); err != nil {
+		printer.StepStart(fmt.Sprintf("Copying PEM for %s/%s from %s", owner, role, appSet))
+		if err := provisioner.CopyAgentPEM(ctx, appSet, owner, role); err != nil {
 			printer.StepFail(fmt.Sprintf("Failed to copy PEM for %s", role))
 			return fmt.Errorf("copying PEM for %s/%s: %w", owner, role, err)
 		}
@@ -456,8 +457,8 @@ func runMintEnrollRepo(ctx context.Context, printer *ui.Printer, repoFullName, p
 
 // resolveEnrollAppIDs builds the org-scoped ROLE_APP_IDS map for enrollment.
 // If roleAppIDsJSON is provided, it is used directly. Otherwise, app IDs are
-// resolved from the existing mint's ROLE_APP_IDS using the source org.
-func resolveEnrollAppIDs(roleAppIDsJSON string, existingIDs map[string]string, sourceOrg, targetOrg string, roleList []string) (map[string]string, error) {
+// resolved from the existing mint's ROLE_APP_IDS using the app set.
+func resolveEnrollAppIDs(roleAppIDsJSON string, existingIDs map[string]string, appSet, targetOrg string, roleList []string) (map[string]string, error) {
 	result := make(map[string]string, len(roleList))
 
 	if roleAppIDsJSON != "" {
@@ -508,7 +509,7 @@ func resolveEnrollAppIDs(roleAppIDsJSON string, existingIDs map[string]string, s
 		return result, nil
 	}
 
-	// Resolve from existing ROLE_APP_IDS using the source org.
+	// Resolve from existing ROLE_APP_IDS using the app set.
 	if len(existingIDs) == 0 {
 		return nil, fmt.Errorf("no existing ROLE_APP_IDS found in mint — use --role-app-ids to provide explicitly")
 	}
@@ -521,11 +522,11 @@ func resolveEnrollAppIDs(roleAppIDsJSON string, existingIDs map[string]string, s
 			continue
 		}
 
-		// Look up the source org's app ID for this role.
-		sourceKey := sourceOrg + "/" + role
+		// Look up the app set's app ID for this role.
+		sourceKey := appSet + "/" + role
 		appID, ok := existingIDs[sourceKey]
 		if !ok {
-			return nil, fmt.Errorf("role %q not found in source org %q's ROLE_APP_IDS — use --role-app-ids to provide explicitly", role, sourceOrg)
+			return nil, fmt.Errorf("role %q not found in app set %q's ROLE_APP_IDS — use --role-app-ids to provide explicitly", role, appSet)
 		}
 		result[targetKey] = appID
 	}

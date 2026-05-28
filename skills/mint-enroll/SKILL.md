@@ -33,7 +33,7 @@ GCP_PROJECT="<your-gcp-project-id>"
 MINT_FUNCTION="fullsend-mint"
 MINT_REGION="us-central1"
 WIF_POOL="fullsend-pool"
-SOURCE_ORG="fullsend-ai"
+APP_SET="fullsend-ai"
 SA_EMAIL="fullsend-mint@${GCP_PROJECT}.iam.gserviceaccount.com"
 
 GCP_PROJECT_NUMBER=$(gcloud projects describe "${GCP_PROJECT}" --format="value(projectNumber)") \
@@ -83,7 +83,7 @@ The fullsend-ai org maintains public GitHub Apps shared across orgs.
 | prioritize | fullsend-ai-prioritize | |
 
 PEM keys are tied to the app, not the org. Enrolling a new org copies PEMs
-from a source org (e.g., `fullsend-ai`).
+from the app set (e.g., `fullsend-ai`).
 
 Apps must be installed on the target org before the mint can produce tokens.
 An org admin installs via `https://github.com/apps/{slug}/installations/new`
@@ -222,7 +222,7 @@ gcloud iam workload-identity-pools providers list \
 
 ### 4. Copy PEM secrets
 
-For shared apps, copy the PEM from the source org. Pipes directly to
+For shared apps, copy the PEM from the app set. Pipes directly to
 avoid holding PEM material in shell variables.
 
 ```bash
@@ -241,7 +241,7 @@ for ROLE in $(echo "${ROLES}" | tr ',' ' '); do
     echo "WARN: ${SECRET_ID} exists but has no active versions — re-adding"
   fi
 
-  SOURCE_SECRET="fullsend-${SOURCE_ORG}--${ROLE}-app-pem"
+  SOURCE_SECRET="fullsend-${APP_SET}--${ROLE}-app-pem"
 
   if ! gcloud secrets describe "${SOURCE_SECRET}" --project="${GCP_PROJECT}" >/dev/null 2>&1; then
     echo "ERROR: source secret ${SOURCE_SECRET} not found" >&2
@@ -340,9 +340,9 @@ else
   NEW_ALLOWED_ORGS="${CURRENT_ALLOWED_ORGS},${ORG}"
 fi
 
-# Merge new entries into ROLE_APP_IDS (pin lookup to SOURCE_ORG)
+# Merge new entries into ROLE_APP_IDS (pin lookup to APP_SET)
 NEW_ROLE_APP_IDS=$(echo "${CURRENT_ROLE_APP_IDS}" | \
-  ORG="${ORG}" ROLES="${ROLES}" SOURCE_ORG="${SOURCE_ORG}" python3 -c "
+  ORG="${ORG}" ROLES="${ROLES}" APP_SET="${APP_SET}" python3 -c "
 import json, sys, os
 raw = sys.stdin.read().strip()
 try:
@@ -352,10 +352,10 @@ except json.JSONDecodeError as e:
     sys.exit(1)
 org = os.environ['ORG'].lower()
 roles_csv = os.environ['ROLES']
-source_org = os.environ['SOURCE_ORG'].lower()
+app_set = os.environ['APP_SET'].lower()
 for role in (r.strip() for r in roles_csv.split(',')):
     key = f'{org}/{role}'
-    source_key = f'{source_org}/{role}'
+    source_key = f'{app_set}/{role}'
     if key in data:
         print(f'SKIP: {key} already exists', file=sys.stderr)
     elif source_key in data:
