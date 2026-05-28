@@ -691,10 +691,8 @@ func (p *Provisioner) provisionSelfManaged(ctx context.Context) (map[string]stri
 		if org == PlaceholderOrg {
 			continue
 		}
-		principal := fmt.Sprintf("principalSet://iam.googleapis.com/projects/%s/locations/global/workloadIdentityPools/%s/attribute.repository/%s/.fullsend",
-			projectNumber, p.cfg.WIFPoolName, org)
-		if err := p.gcpAPI.SetProjectIAMBinding(ctx, p.cfg.ProjectID, principal, "roles/aiplatform.user"); err != nil {
-			return nil, fmt.Errorf("granting Vertex AI access for org %s: %w", org, err)
+		if err := p.grantOrgVertexAIAccessWithNumber(ctx, projectNumber, org); err != nil {
+			return nil, err
 		}
 		iamGrantCount++
 	}
@@ -1193,9 +1191,7 @@ func (p *Provisioner) grantOrgVertexAIAccessWithNumber(ctx context.Context, proj
 	return nil
 }
 
-// GrantRepoVertexAIAccess grants roles/aiplatform.user to a specific repo's
-// principal so that its workflows can call Vertex AI.
-func (p *Provisioner) GrantRepoVertexAIAccess(ctx context.Context, repo string) error {
+func (p *Provisioner) grantRepoVertexAIAccess(ctx context.Context, repo string) error {
 	repo = strings.ToLower(repo)
 
 	projectNumber, err := p.gcpAPI.GetProjectNumber(ctx, p.cfg.ProjectID)
@@ -1232,7 +1228,7 @@ func (p *Provisioner) EnsureOrgInWIFCondition(ctx context.Context, org string) e
 		return fmt.Errorf("reading WIF provider: %w", err)
 	}
 	if existing == nil {
-		return fmt.Errorf("WIF provider %s not found — run 'mint deploy' first", p.cfg.WIFProvider)
+		return fmt.Errorf("WIF provider %s not found — run 'inference provision' or 'mint deploy' first", p.cfg.WIFProvider)
 	}
 
 	existingOrgs := parseConditionOrgs(existing.AttributeCondition)
