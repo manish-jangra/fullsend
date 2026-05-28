@@ -1,6 +1,6 @@
 ---
 title: "38. Universal harness access via URLs and paths"
-status: Proposed
+status: Accepted
 relates_to:
   - agent-architecture
   - security-threat-model
@@ -20,7 +20,7 @@ Date: 2026-05-07
 
 ## Status
 
-Proposed
+Accepted
 
 ## Context
 

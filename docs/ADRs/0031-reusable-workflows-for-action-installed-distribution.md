@@ -1,6 +1,6 @@
 ---
 title: "31. Reusable workflows for action-installed distribution"
-status: Proposed
+status: Accepted
 relates_to:
   - agent-infrastructure
 topics:
@@ -16,7 +16,7 @@ Date: 2026-05-06
 
 ## Status
 
-Proposed
+Accepted
 
 ## Context
 

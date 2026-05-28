@@ -1,6 +1,6 @@
 ---
 title: "34. Centralized shim routing via dispatch.yml"
-status: Proposed
+status: Accepted
 relates_to:
   - agent-infrastructure
 topics:
@@ -16,7 +16,7 @@ Date: 2026-05-07
 
 ## Status
 
-Proposed
+Accepted
 
 ## Context
 

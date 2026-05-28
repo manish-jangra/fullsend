@@ -1,6 +1,6 @@
 ---
 title: "2. Initial Fullsend Design"
-status: Proposed
+status: Accepted
 relates_to:
   - agent-architecture
   - autonomy-spectrum
@@ -21,7 +21,7 @@ Date: 2026-03-23
 
 ## Status
 
-Proposed
+Accepted
 
 ## Context
 

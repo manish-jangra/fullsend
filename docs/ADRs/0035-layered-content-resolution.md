@@ -1,6 +1,6 @@
 ---
 title: "35. Layered content resolution"
-status: Proposed
+status: Accepted
 relates_to:
   - agent-infrastructure
   - agent-architecture
@@ -17,7 +17,7 @@ Date: 2026-05-09
 
 ## Status
 
-Proposed
+Accepted
 
 ## Context
 
