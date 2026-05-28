@@ -123,6 +123,7 @@ jobs:
           ISSUE_NUMBER: ${{ fromJSON(inputs.event_payload).issue.number }}
           REPO_FULL_NAME: ${{ inputs.source_repo }}
           GITHUB_ISSUE_URL: ${{ fromJSON(inputs.event_payload).issue.html_url }}
+          COMMENT_BODY: ${{ fromJSON(inputs.event_payload).comment.body }}
         run: bash scripts/pre-code.sh
 
       - name: Setup GCP and prepare credentials

@@ -8,7 +8,9 @@ Structure decided in [ADR 0023](../ADRs/0023-user-documentation-structure.md).
 
 Guides for org administrators who install, configure, and manage fullsend.
 
-- [Installing fullsend](admin/installation.md) — Set up fullsend in a GitHub organization from scratch (see [#328](https://github.com/fullsend-ai/fullsend/pull/328))
+- [Installing fullsend](admin/installation.md) — All-in-one setup for a GitHub organization (GCP + GitHub)
+- [Setting up with pre-provisioned infrastructure](admin/github-setup.md) — GitHub-only setup when GCP infrastructure is already provisioned
+- [Infrastructure reference](admin/infrastructure-reference.md) — Token mint, WIF, and secrets deployment details
 - [Enabling fullsend on private repositories](admin/private-repositories.md) — Additional guardrails and configuration for private repos
 
 ## User guides
@@ -23,3 +25,4 @@ Guides for developers working in repositories where fullsend is active.
 Guides for contributors developing and testing fullsend itself.
 
 - [Local development](dev/local-dev.md) — Run fullsend agents locally on macOS and Linux (amd64 + arm64)
+- [CLI internals](dev/cli-internals.md) — Command structure, installation pipeline, and sandbox runtime

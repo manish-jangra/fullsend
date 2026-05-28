@@ -2,6 +2,8 @@
 
 This guide walks through installing fullsend in a GitHub organization and enrolling your first repository.
 
+> **GitHub-only setup:** If your GCP admin has already deployed the token mint and inference infrastructure, you do not need GCP access. See [Setting up with pre-provisioned infrastructure](github-setup.md) for the GitHub-only path using `fullsend github setup`.
+
 ## Prerequisites
 
 - **GitHub organization** with admin access
@@ -326,6 +328,8 @@ Per-repo mode installs fullsend for a single repository without requiring an org
 
 When a platform operator has pre-provisioned shared public GitHub Apps and a token mint, you only need to provide a GCP project for inference. This is the simplest installation path — no Apps to create, no mint to deploy, no PEM management.
 
+> **Tip:** For GitHub-only setup without GCP access, use `fullsend github setup` instead of `admin install`. See [Setting up with pre-provisioned infrastructure](github-setup.md).
+
 > This section documents the **SaaS installation profile** defined in [ADR 0033 §6](../../ADRs/0033-per-repo-installation-mode.md#6-credential-models). If you are reusing apps from your own prior per-org installation, see [Reusing existing infrastructure](#reusing-existing-infrastructure) instead.
 
 **Prerequisites:**
@@ -492,9 +496,35 @@ fullsend admin uninstall "$ORG_NAME" --app-set "$ORG_NAME"
 
 ---
 
+## Standalone commands
+
+The `admin install` command performs all setup in a single invocation. For organizations that separate GCP and GitHub responsibilities across teams, fullsend provides standalone commands that decompose the same pipeline:
+
+| Role | Command | What it does |
+|------|---------|-------------|
+| GCP Admin (Mint) | `fullsend mint deploy` | Deploy the token mint Cloud Function |
+| GCP Admin (Mint) | `fullsend mint enroll <org\|owner/repo>` | Register an org or repo in the mint, store PEMs |
+| GCP Admin (Mint) | `fullsend mint unenroll <org\|owner/repo>` | Remove an org or repo from the mint |
+| GCP Admin (Mint) | `fullsend mint status` | Inspect mint state and PEM health |
+| GCP Admin (Inference) | `fullsend inference provision <org\|owner/repo>` | Create WIF pool/provider for Agent Platform |
+| GCP Admin (Inference) | `fullsend inference status <org\|owner/repo>` | Check WIF health, print config values |
+| GitHub Maintainer | `fullsend github setup <org\|owner/repo>` | Configure GitHub org or repo (no GCP needed) |
+| GitHub Maintainer | `fullsend github enroll <org> [repo...]` | Add repositories to agent enrollment |
+| GitHub Maintainer | `fullsend github unenroll <org> [repo...]` | Remove repositories from agent enrollment |
+| GitHub Maintainer | `fullsend github set <org\|owner/repo> <key> <value>` | Update a single config value (secret or variable) |
+| GitHub Maintainer | `fullsend github status <org>` | Analyze GitHub-side installation state |
+| GitHub Maintainer | `fullsend github sync-scaffold <org>` | Update workflow templates to current CLI version |
+| GitHub Maintainer | `fullsend github uninstall <org>` | Remove GitHub configuration (org-level only) |
+
+See [Setting up with pre-provisioned infrastructure](github-setup.md) for the complete GitHub maintainer guide.
+
+---
+
 ## Advanced: pre-configure WIF
 
-The installer auto-provisions WIF infrastructure, but you can create it manually if you need custom pool names, attribute conditions, or want to share a provider across tools.
+The installer auto-provisions WIF infrastructure. For most cases, `fullsend inference provision <org>` handles this automatically and prints the WIF provider resource name to pass to `admin install --inference-wif-provider` or `github setup --inference-wif-provider`.
+
+If you need custom pool names, attribute conditions, or want to share a provider across tools, you can create WIF manually:
 
 **Create a Workload Identity Pool and OIDC Provider:**
 
@@ -544,3 +574,10 @@ fullsend admin install "$ORG_NAME" \
 ```
 
 > **Note:** IAM policy bindings may take several minutes to propagate. If agent workflows fail with a permission error immediately after setup, wait a few minutes and retry.
+
+## See Also
+
+- [Setting up with pre-provisioned infrastructure](github-setup.md) — GitHub-only setup when GCP is already provisioned
+- [Infrastructure Reference](infrastructure-reference.md) — Token mint, WIF, and secrets deployment details
+- [Enabling fullsend on private repositories](private-repositories.md) — Additional guardrails for private repos
+- [CLI Internals](../dev/cli-internals.md) — Command structure and implementation details

@@ -247,8 +247,8 @@ jobs:
         run: |
           if [[ "${TRIGGER_SOURCE}" =~ \[bot\]$ ]]; then
             PR_INFO=$(gh pr view "${PR_NUM}" --repo "${SOURCE_REPO}" \
-              --json labels,author --jq '{labels: [.labels[].name], author: .author.login}' 2>/dev/null \
-              || echo '{"labels":[],"author":""}')
+              --json labels,author --jq '{labels: [.labels[].name], author: .author.login}') \
+              || { echo "::error::Failed to fetch PR info for #${PR_NUM}"; exit 1; }
 
             HAS_NO_FIX=$(echo "${PR_INFO}" | jq -r '.labels | any(. == "fullsend-no-fix")')
             if [[ "${HAS_NO_FIX}" == "true" ]]; then

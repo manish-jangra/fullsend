@@ -86,11 +86,11 @@ run_test() {
     GH_TOKEN="fake-token"
   )
 
-  # Add extra env vars if provided.
+  # Add extra env vars if provided (read line-by-line to support values with spaces).
   if [[ -n "${extra_env}" ]]; then
-    for kv in ${extra_env}; do
-      env_cmd+=("${kv}")
-    done
+    while IFS= read -r kv; do
+      [[ -n "${kv}" ]] && env_cmd+=("${kv}")
+    done <<< "${extra_env}"
   fi
 
   local exit_code=0
@@ -139,9 +139,9 @@ run_test_stdout() {
   )
 
   if [[ -n "${extra_env}" ]]; then
-    for kv in ${extra_env}; do
-      env_cmd+=("${kv}")
-    done
+    while IFS= read -r kv; do
+      [[ -n "${kv}" ]] && env_cmd+=("${kv}")
+    done <<< "${extra_env}"
   fi
 
   local exit_code=0
@@ -199,11 +199,18 @@ run_test_stdout "bot-pr-does-not-block" \
   0
 
 # CODE_FORCE=true → should skip check even with human PR.
-run_test_stdout "force-override-skips-check" \
+run_test_stdout "force-override-code-force" \
   "99${TAB}human-dev${TAB}https://github.com/test-org/test-repo/pull/99" \
-  "CODE_FORCE=true" \
+  "Force override" \
   0 \
   "CODE_FORCE=true"
+
+# COMMENT_BODY contains --force → should also skip check.
+run_test_stdout "force-override-comment-body" \
+  "99${TAB}human-dev${TAB}https://github.com/test-org/test-repo/pull/99" \
+  "Force override" \
+  0 \
+  "COMMENT_BODY=/fs-code --force"
 
 # No GH_TOKEN → skips check entirely, exits 0.
 run_test_stdout "no-gh-token-skips-check" \

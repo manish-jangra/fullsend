@@ -374,6 +374,14 @@ func TestCodeAgentContent(t *testing.T) {
 	assert.Contains(t, s, "code-implementation")
 }
 
+func TestCodeImplementationSkillAPIContractGuidance(t *testing.T) {
+	content, err := FullsendRepoFile("skills/code-implementation/SKILL.md")
+	require.NoError(t, err)
+	s := string(content)
+	assert.Contains(t, s, "Verify API contracts per code path")
+	assert.Contains(t, s, "or changes a parameter sent to an external API")
+}
+
 func TestCodeWorkflowContent(t *testing.T) {
 	content, err := FullsendRepoFile(".github/workflows/code.yml")
 	require.NoError(t, err)
@@ -701,6 +709,8 @@ func TestPrioritizeWorkflowContent(t *testing.T) {
 	assert.Contains(t, s, "event_payload")
 	assert.Contains(t, s, "FULLSEND_PROJECT_NUMBER")
 	assert.Contains(t, s, "setup-agent-env.sh")
+	assert.Contains(t, s, `cp "${SRC}/.github/scripts/setup-agent-env.sh"`)
+	assert.NotContains(t, s, ".defaults/.github/scripts")
 	assert.Contains(t, s, "agent: prioritize")
 	assert.Contains(t, s, "concurrency:")
 	assert.Contains(t, s, "fullsend-prioritize")
