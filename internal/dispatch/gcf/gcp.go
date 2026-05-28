@@ -92,6 +92,12 @@ type GCFClient interface {
 	CreateFunction(ctx context.Context, projectID, region, functionName string, cfg FunctionConfig) (string, error)
 	UpdateFunction(ctx context.Context, projectID, region, functionName string, cfg FunctionConfig) (string, error)
 	UpdateFunctionEnvVars(ctx context.Context, projectID, region, functionName string, envVars map[string]string) (string, error)
+	// UpdateServiceEnvVars updates environment variables on the underlying
+	// Cloud Run service directly, bypassing the Cloud Functions API. This
+	// avoids triggering a source rebuild — only a new revision is created
+	// reusing the existing container image. Polls the Cloud Run LRO
+	// internally and returns after the update is complete.
+	UpdateServiceEnvVars(ctx context.Context, projectID, region, serviceName string, envVars map[string]string) error
 	WaitForOperation(ctx context.Context, operationName string) error
 
 	// Project number lookup
@@ -1038,6 +1044,130 @@ func (c *LiveGCFClient) UpdateFunctionEnvVars(ctx context.Context, projectID, re
 	}
 
 	return result.Name, nil
+}
+
+// UpdateServiceEnvVars updates environment variables on the underlying
+// Cloud Run service directly via the Cloud Run Admin API v2, bypassing the
+// Cloud Functions API entirely. This avoids triggering a source rebuild —
+// only a new Cloud Run revision is created reusing the existing container
+// image. The method polls the Cloud Run LRO until the update completes.
+func (c *LiveGCFClient) UpdateServiceEnvVars(ctx context.Context, projectID, region, serviceName string, envVars map[string]string) error {
+	serviceURL := fmt.Sprintf("https://run.googleapis.com/v2/projects/%s/locations/%s/services/%s",
+		url.PathEscape(projectID), url.PathEscape(region), url.PathEscape(serviceName))
+
+	// GET current service to preserve container config (image, ports, etc.).
+	getResp, err := c.Client.DoRequest(ctx, http.MethodGet, serviceURL, "")
+	if err != nil {
+		return fmt.Errorf("getting Cloud Run service: %w", err)
+	}
+	defer getResp.Body.Close()
+
+	if getResp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(io.LimitReader(getResp.Body, 1<<20))
+		return fmt.Errorf("unexpected status %d getting Cloud Run service: %s", getResp.StatusCode, gcp.ExtractErrorMessage(body))
+	}
+
+	var service map[string]interface{}
+	if err := json.NewDecoder(getResp.Body).Decode(&service); err != nil {
+		return fmt.Errorf("decoding Cloud Run service: %w", err)
+	}
+
+	// Build the env var array in Cloud Run format: [{name, value}, ...].
+	envArray := make([]map[string]string, 0, len(envVars))
+	for k, v := range envVars {
+		envArray = append(envArray, map[string]string{"name": k, "value": v})
+	}
+
+	// Navigate to template.containers[0] and replace its env field.
+	template, _ := service["template"].(map[string]interface{})
+	if template == nil {
+		return fmt.Errorf("Cloud Run service has no template")
+	}
+	containers, _ := template["containers"].([]interface{})
+	if len(containers) == 0 {
+		return fmt.Errorf("Cloud Run service has no containers")
+	}
+	container, _ := containers[0].(map[string]interface{})
+	if container == nil {
+		return fmt.Errorf("Cloud Run service container is not an object")
+	}
+	container["env"] = envArray
+
+	payloadBytes, err := json.Marshal(service)
+	if err != nil {
+		return fmt.Errorf("marshaling Cloud Run service update: %w", err)
+	}
+
+	// PATCH the service. Cloud Run creates a new revision with the updated env.
+	patchResp, err := c.Client.DoRequest(ctx, http.MethodPatch, serviceURL, string(payloadBytes))
+	if err != nil {
+		return fmt.Errorf("patching Cloud Run service: %w", err)
+	}
+	defer patchResp.Body.Close()
+
+	if patchResp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(io.LimitReader(patchResp.Body, 1<<20))
+		return fmt.Errorf("unexpected status %d patching Cloud Run service: %s", patchResp.StatusCode, gcp.ExtractErrorMessage(body))
+	}
+
+	var op struct {
+		Name string `json:"name"`
+		Done bool   `json:"done"`
+	}
+	if err := json.NewDecoder(patchResp.Body).Decode(&op); err != nil {
+		return fmt.Errorf("decoding Cloud Run patch response: %w", err)
+	}
+
+	if op.Done {
+		return nil
+	}
+	if op.Name == "" {
+		return nil
+	}
+
+	return c.waitForCloudRunOperation(ctx, op.Name)
+}
+
+// waitForCloudRunOperation polls a Cloud Run LRO until it completes.
+// Cloud Run operations are polled at run.googleapis.com, not
+// cloudfunctions.googleapis.com.
+func (c *LiveGCFClient) waitForCloudRunOperation(ctx context.Context, operationName string) error {
+	reqURL := fmt.Sprintf("https://run.googleapis.com/v2/%s", operationName)
+
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
+	defer cancel()
+
+	for {
+		resp, err := c.Client.DoRequest(ctx, http.MethodGet, reqURL, "")
+		if err != nil {
+			return fmt.Errorf("polling Cloud Run operation: %w", err)
+		}
+
+		var op struct {
+			Done  bool `json:"done"`
+			Error *struct {
+				Message string `json:"message"`
+			} `json:"error"`
+		}
+		decodeErr := json.NewDecoder(resp.Body).Decode(&op)
+		resp.Body.Close()
+		if decodeErr != nil {
+			return fmt.Errorf("decoding Cloud Run operation status: %w", decodeErr)
+		}
+
+		if op.Done {
+			if op.Error != nil {
+				return fmt.Errorf("Cloud Run operation failed: %s", op.Error.Message)
+			}
+			return nil
+		}
+
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(3 * time.Second):
+		}
+	}
 }
 
 // WaitForOperation polls a long-running operation until it completes or

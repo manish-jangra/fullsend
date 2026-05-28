@@ -408,13 +408,8 @@ func (p *Provisioner) EnsureOrgInMint(ctx context.Context, expectedURL string, o
 		updated["ALLOWED_WORKFLOW_FILES"] = "*"
 	}
 
-	opName, err := p.gcpAPI.UpdateFunctionEnvVars(ctx, p.cfg.ProjectID, p.cfg.Region, functionName, updated)
-	if err != nil {
+	if err := p.gcpAPI.UpdateServiceEnvVars(ctx, p.cfg.ProjectID, p.cfg.Region, functionName, updated); err != nil {
 		return fmt.Errorf("updating mint env vars: %w", err)
-	}
-
-	if err := p.gcpAPI.WaitForOperation(ctx, opName); err != nil {
-		return fmt.Errorf("waiting for mint env vars update: %w", err)
 	}
 
 	return nil
@@ -463,11 +458,10 @@ func (p *Provisioner) RegisterPerRepoWIF(ctx context.Context, repo string) error
 		updated["PER_REPO_WIF_REPOS"] = existing + "," + repo
 	}
 
-	opName, err := p.gcpAPI.UpdateFunctionEnvVars(ctx, p.cfg.ProjectID, p.cfg.Region, functionName, updated)
-	if err != nil {
-		return fmt.Errorf("updating PER_REPO_WIF_REPOS: %w", err)
+	if err := p.gcpAPI.UpdateServiceEnvVars(ctx, p.cfg.ProjectID, p.cfg.Region, functionName, updated); err != nil {
+		return fmt.Errorf("updating mint env vars: %w", err)
 	}
-	return p.gcpAPI.WaitForOperation(ctx, opName)
+	return nil
 }
 
 // Provision creates the GCP infrastructure for the token mint.
@@ -1466,7 +1460,7 @@ func ValidateRepoSlug(slug string) bool {
 
 // RemoveOrgFromMint removes an org from ROLE_APP_IDS, ALLOWED_ORGS,
 // and re-derives ALLOWED_ROLES. Uses read-modify-write via
-// UpdateFunctionEnvVars (never --set-env-vars).
+// UpdateServiceEnvVars (Cloud Run API, no rebuild).
 func (p *Provisioner) RemoveOrgFromMint(ctx context.Context, org string) error {
 	org = strings.ToLower(org)
 
@@ -1518,15 +1512,14 @@ func (p *Provisioner) RemoveOrgFromMint(ctx context.Context, org string) error {
 	// Re-derive ALLOWED_ROLES.
 	updated["ALLOWED_ROLES"] = deriveAllowedRoles(updated["ROLE_APP_IDS"])
 
-	opName, err := p.gcpAPI.UpdateFunctionEnvVars(ctx, p.cfg.ProjectID, p.cfg.Region, functionName, updated)
-	if err != nil {
+	if err := p.gcpAPI.UpdateServiceEnvVars(ctx, p.cfg.ProjectID, p.cfg.Region, functionName, updated); err != nil {
 		return fmt.Errorf("updating mint env vars: %w", err)
 	}
-	return p.gcpAPI.WaitForOperation(ctx, opName)
+	return nil
 }
 
 // RemoveRepoFromMint removes a repo from PER_REPO_WIF_REPOS.
-// Uses read-modify-write via UpdateFunctionEnvVars.
+// Uses read-modify-write via UpdateServiceEnvVars.
 func (p *Provisioner) RemoveRepoFromMint(ctx context.Context, repo string) error {
 	repo = strings.ToLower(repo)
 
@@ -1553,11 +1546,10 @@ func (p *Provisioner) RemoveRepoFromMint(ctx context.Context, repo string) error
 	}
 	updated["PER_REPO_WIF_REPOS"] = strings.Join(filtered, ",")
 
-	opName, err := p.gcpAPI.UpdateFunctionEnvVars(ctx, p.cfg.ProjectID, p.cfg.Region, functionName, updated)
-	if err != nil {
-		return fmt.Errorf("updating PER_REPO_WIF_REPOS: %w", err)
+	if err := p.gcpAPI.UpdateServiceEnvVars(ctx, p.cfg.ProjectID, p.cfg.Region, functionName, updated); err != nil {
+		return fmt.Errorf("updating mint env vars: %w", err)
 	}
-	return p.gcpAPI.WaitForOperation(ctx, opName)
+	return nil
 }
 
 // DisablePEMSecrets disables the latest version of each PEM secret for an

@@ -78,6 +78,9 @@ type fakeGCFClient struct {
 	// Captured env vars from the last UpdateFunctionEnvVars call.
 	lastUpdateFunctionEnvVars map[string]string
 
+	// Captured env vars from the last UpdateServiceEnvVars call.
+	lastUpdateServiceEnvVars map[string]string
+
 	// Captured project IAM binding arguments.
 	projectIAMBindings []projectIAMBinding
 }
@@ -228,6 +231,11 @@ func (f *fakeGCFClient) UpdateFunctionEnvVars(_ context.Context, _, _, _ string,
 		return "", err
 	}
 	return "operations/envvar-update-789", nil
+}
+func (f *fakeGCFClient) UpdateServiceEnvVars(_ context.Context, _, _, _ string, envVars map[string]string) error {
+	f.calls = append(f.calls, "UpdateServiceEnvVars")
+	f.lastUpdateServiceEnvVars = envVars
+	return f.errs["UpdateServiceEnvVars"]
 }
 func (f *fakeGCFClient) WaitForOperation(_ context.Context, _ string) error {
 	return f.record("WaitForOperation")
@@ -628,7 +636,7 @@ func TestProvisioner_Provision_SkipDeployReusesExisting(t *testing.T) {
 	assert.NotContains(t, fake.calls, "UpdateFunction")
 
 	// EnsureOrgInMint still registers the org via env-var-only update.
-	assert.Contains(t, fake.calls, "UpdateFunctionEnvVars")
+	assert.Contains(t, fake.calls, "UpdateServiceEnvVars")
 	assert.Equal(t, "https://fullsend-mint-abc123.run.app", vars["FULLSEND_MINT_URL"])
 }
 
@@ -733,11 +741,11 @@ func TestProvisioner_Provision_SameCodeNewOrg_EnvVarOnlyUpdate(t *testing.T) {
 	assert.NotContains(t, fake.calls, "UpdateFunction")
 
 	// EnsureOrgInMint adds the new org via env-var-only update.
-	assert.Contains(t, fake.calls, "UpdateFunctionEnvVars")
+	assert.Contains(t, fake.calls, "UpdateServiceEnvVars")
 
 	// Verify new org was added to ALLOWED_ORGS alongside existing.
-	require.NotNil(t, fake.lastUpdateFunctionEnvVars)
-	allowedOrgs := fake.lastUpdateFunctionEnvVars["ALLOWED_ORGS"]
+	require.NotNil(t, fake.lastUpdateServiceEnvVars)
+	allowedOrgs := fake.lastUpdateServiceEnvVars["ALLOWED_ORGS"]
 	assert.Contains(t, allowedOrgs, "new-org")
 	assert.Contains(t, allowedOrgs, "existing-org")
 
@@ -1629,10 +1637,10 @@ func TestProvisioner_Provision_MultiOrg_MergeDoesNotOverwriteExistingPEMs(t *tes
 
 	// ROLE_APP_IDS should preserve existing-org's entries and add new-org's.
 	// After the refactor, code deploy preserves existing env vars, and
-	// EnsureOrgInMint merges the new org's entries via UpdateFunctionEnvVars.
-	require.NotNil(t, fake.lastUpdateFunctionEnvVars, "expected EnsureOrgInMint to update env vars")
-	assert.Contains(t, fake.lastUpdateFunctionEnvVars["ROLE_APP_IDS"], `"existing-org/coder":"999"`)
-	assert.Contains(t, fake.lastUpdateFunctionEnvVars["ROLE_APP_IDS"], `"new-org/coder"`)
+	// EnsureOrgInMint merges the new org's entries via UpdateServiceEnvVars.
+	require.NotNil(t, fake.lastUpdateServiceEnvVars, "expected EnsureOrgInMint to update env vars")
+	assert.Contains(t, fake.lastUpdateServiceEnvVars["ROLE_APP_IDS"], `"existing-org/coder":"999"`)
+	assert.Contains(t, fake.lastUpdateServiceEnvVars["ROLE_APP_IDS"], `"new-org/coder"`)
 }
 
 // --- ProvisionWIF tests ---
@@ -2390,7 +2398,7 @@ func TestEnsureOrgInMint_OrgAlreadyCovered(t *testing.T) {
 		"acme-corp/reviewer": "222",
 	})
 	require.NoError(t, err)
-	assert.NotContains(t, fake.calls, "UpdateFunctionEnvVars")
+	assert.NotContains(t, fake.calls, "UpdateServiceEnvVars")
 }
 
 func TestEnsureOrgInMint_AddsNewOrg(t *testing.T) {
@@ -2410,21 +2418,21 @@ func TestEnsureOrgInMint_AddsNewOrg(t *testing.T) {
 		"new-org/reviewer": "201",
 	})
 	require.NoError(t, err)
-	assert.Contains(t, fake.calls, "UpdateFunctionEnvVars")
-	assert.Contains(t, fake.calls, "WaitForOperation")
+	assert.Contains(t, fake.calls, "UpdateServiceEnvVars")
+	assert.NotContains(t, fake.calls, "WaitForOperation")
 
-	require.NotNil(t, fake.lastUpdateFunctionEnvVars)
-	assert.Contains(t, fake.lastUpdateFunctionEnvVars["ALLOWED_ORGS"], "new-org")
-	assert.Contains(t, fake.lastUpdateFunctionEnvVars["ALLOWED_ORGS"], "existing-org")
+	require.NotNil(t, fake.lastUpdateServiceEnvVars)
+	assert.Contains(t, fake.lastUpdateServiceEnvVars["ALLOWED_ORGS"], "new-org")
+	assert.Contains(t, fake.lastUpdateServiceEnvVars["ALLOWED_ORGS"], "existing-org")
 
 	var roleAppIDs map[string]string
-	require.NoError(t, json.Unmarshal([]byte(fake.lastUpdateFunctionEnvVars["ROLE_APP_IDS"]), &roleAppIDs))
+	require.NoError(t, json.Unmarshal([]byte(fake.lastUpdateServiceEnvVars["ROLE_APP_IDS"]), &roleAppIDs))
 	assert.Equal(t, "200", roleAppIDs["new-org/coder"])
 	assert.Equal(t, "201", roleAppIDs["new-org/reviewer"])
 	assert.Equal(t, "100", roleAppIDs["existing-org/coder"])
 
-	assert.Contains(t, fake.lastUpdateFunctionEnvVars["ALLOWED_ROLES"], "coder")
-	assert.Contains(t, fake.lastUpdateFunctionEnvVars["ALLOWED_ROLES"], "reviewer")
+	assert.Contains(t, fake.lastUpdateServiceEnvVars["ALLOWED_ROLES"], "coder")
+	assert.Contains(t, fake.lastUpdateServiceEnvVars["ALLOWED_ROLES"], "reviewer")
 }
 
 func TestEnsureOrgInMint_FunctionNotFound(t *testing.T) {
@@ -2473,10 +2481,10 @@ func TestEnsureOrgInMint_PartialCoverage(t *testing.T) {
 		"acme-corp/reviewer": "222",
 	})
 	require.NoError(t, err)
-	assert.Contains(t, fake.calls, "UpdateFunctionEnvVars")
+	assert.Contains(t, fake.calls, "UpdateServiceEnvVars")
 
 	var roleAppIDs map[string]string
-	require.NoError(t, json.Unmarshal([]byte(fake.lastUpdateFunctionEnvVars["ROLE_APP_IDS"]), &roleAppIDs))
+	require.NoError(t, json.Unmarshal([]byte(fake.lastUpdateServiceEnvVars["ROLE_APP_IDS"]), &roleAppIDs))
 	assert.Equal(t, "111", roleAppIDs["acme-corp/coder"])
 	assert.Equal(t, "222", roleAppIDs["acme-corp/reviewer"])
 }
@@ -2490,7 +2498,7 @@ func TestEnsureOrgInMint_UpdateFails(t *testing.T) {
 			"ROLE_APP_IDS": `{"existing-org/coder":"100"}`,
 		},
 	}
-	fake.errs["UpdateFunctionEnvVars"] = fmt.Errorf("permission denied")
+	fake.errs["UpdateServiceEnvVars"] = fmt.Errorf("permission denied")
 
 	p := NewProvisioner(Config{ProjectID: "proj1", Region: "us-central1"}, fake)
 	err := p.EnsureOrgInMint(context.Background(), "https://mint.example.com", "new-org", map[string]string{
@@ -2514,10 +2522,10 @@ func TestEnsureOrgInMint_EmptyRoleAppIDs(t *testing.T) {
 		"new-org/coder": "200",
 	})
 	require.NoError(t, err)
-	assert.Contains(t, fake.calls, "UpdateFunctionEnvVars")
+	assert.Contains(t, fake.calls, "UpdateServiceEnvVars")
 
 	var roleAppIDs map[string]string
-	require.NoError(t, json.Unmarshal([]byte(fake.lastUpdateFunctionEnvVars["ROLE_APP_IDS"]), &roleAppIDs))
+	require.NoError(t, json.Unmarshal([]byte(fake.lastUpdateServiceEnvVars["ROLE_APP_IDS"]), &roleAppIDs))
 	assert.Equal(t, "200", roleAppIDs["new-org/coder"])
 }
 
@@ -2533,7 +2541,7 @@ func TestEnsureOrgInMint_NilReturn(t *testing.T) {
 	assert.Contains(t, err.Error(), "not found in project")
 }
 
-func TestEnsureOrgInMint_WaitFails(t *testing.T) {
+func TestEnsureOrgInMint_UpdateServiceFails(t *testing.T) {
 	fake := newFakeGCFClient()
 	fake.functionInfo = &FunctionInfo{
 		URI: "https://mint.example.com",
@@ -2542,14 +2550,14 @@ func TestEnsureOrgInMint_WaitFails(t *testing.T) {
 			"ROLE_APP_IDS": `{"existing-org/coder":"100"}`,
 		},
 	}
-	fake.errs["WaitForOperation"] = fmt.Errorf("operation timed out")
+	fake.errs["UpdateServiceEnvVars"] = fmt.Errorf("operation timed out")
 
 	p := NewProvisioner(Config{ProjectID: "proj1", Region: "us-central1"}, fake)
 	err := p.EnsureOrgInMint(context.Background(), "https://mint.example.com", "new-org", map[string]string{
 		"new-org/coder": "200",
 	})
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "waiting for mint env vars update")
+	assert.Contains(t, err.Error(), "updating mint env vars")
 }
 
 func TestEnsureOrgInMint_MalformedRoleAppIDs(t *testing.T) {
@@ -2586,10 +2594,10 @@ func TestEnsureOrgInMint_ValueMismatchTriggersUpdate(t *testing.T) {
 		"acme-corp/coder": "222",
 	})
 	require.NoError(t, err)
-	assert.Contains(t, fake.calls, "UpdateFunctionEnvVars")
+	assert.Contains(t, fake.calls, "UpdateServiceEnvVars")
 
 	var roleAppIDs map[string]string
-	require.NoError(t, json.Unmarshal([]byte(fake.lastUpdateFunctionEnvVars["ROLE_APP_IDS"]), &roleAppIDs))
+	require.NoError(t, json.Unmarshal([]byte(fake.lastUpdateServiceEnvVars["ROLE_APP_IDS"]), &roleAppIDs))
 	assert.Equal(t, "222", roleAppIDs["acme-corp/coder"])
 }
 
@@ -2609,9 +2617,9 @@ func TestEnsureOrgInMint_LowercasesOrg(t *testing.T) {
 		"acmecorp/coder": "200",
 	})
 	require.NoError(t, err)
-	assert.Contains(t, fake.calls, "UpdateFunctionEnvVars")
-	assert.Contains(t, fake.lastUpdateFunctionEnvVars["ALLOWED_ORGS"], "acmecorp")
-	assert.NotContains(t, fake.lastUpdateFunctionEnvVars["ALLOWED_ORGS"], "AcmeCorp")
+	assert.Contains(t, fake.calls, "UpdateServiceEnvVars")
+	assert.Contains(t, fake.lastUpdateServiceEnvVars["ALLOWED_ORGS"], "acmecorp")
+	assert.NotContains(t, fake.lastUpdateServiceEnvVars["ALLOWED_ORGS"], "AcmeCorp")
 }
 
 func TestEnsureOrgInMint_DefaultsAllowedWorkflowFiles(t *testing.T) {
@@ -2630,7 +2638,7 @@ func TestEnsureOrgInMint_DefaultsAllowedWorkflowFiles(t *testing.T) {
 		"new-org/coder": "200",
 	})
 	require.NoError(t, err)
-	assert.Equal(t, "*", fake.lastUpdateFunctionEnvVars["ALLOWED_WORKFLOW_FILES"])
+	assert.Equal(t, "*", fake.lastUpdateServiceEnvVars["ALLOWED_WORKFLOW_FILES"])
 }
 
 func TestEnsureOrgInMint_PreservesExistingAllowedWorkflowFiles(t *testing.T) {
@@ -2650,7 +2658,7 @@ func TestEnsureOrgInMint_PreservesExistingAllowedWorkflowFiles(t *testing.T) {
 		"new-org/coder": "200",
 	})
 	require.NoError(t, err)
-	assert.Equal(t, ".github/workflows/ci.yml", fake.lastUpdateFunctionEnvVars["ALLOWED_WORKFLOW_FILES"])
+	assert.Equal(t, ".github/workflows/ci.yml", fake.lastUpdateServiceEnvVars["ALLOWED_WORKFLOW_FILES"])
 }
 
 func TestRegisterPerRepoWIF_AddsNewRepo(t *testing.T) {
@@ -2663,8 +2671,8 @@ func TestRegisterPerRepoWIF_AddsNewRepo(t *testing.T) {
 	p := NewProvisioner(Config{ProjectID: "proj1", Region: "us-central1"}, fake)
 	err := p.RegisterPerRepoWIF(context.Background(), "acme-corp/my-service")
 	require.NoError(t, err)
-	assert.Contains(t, fake.calls, "UpdateFunctionEnvVars")
-	assert.Equal(t, "acme-corp/my-service", fake.lastUpdateFunctionEnvVars["PER_REPO_WIF_REPOS"])
+	assert.Contains(t, fake.calls, "UpdateServiceEnvVars")
+	assert.Equal(t, "acme-corp/my-service", fake.lastUpdateServiceEnvVars["PER_REPO_WIF_REPOS"])
 }
 
 func TestRegisterPerRepoWIF_AppendsToExisting(t *testing.T) {
@@ -2679,7 +2687,7 @@ func TestRegisterPerRepoWIF_AppendsToExisting(t *testing.T) {
 	p := NewProvisioner(Config{ProjectID: "proj1", Region: "us-central1"}, fake)
 	err := p.RegisterPerRepoWIF(context.Background(), "acme-corp/second-repo")
 	require.NoError(t, err)
-	assert.Equal(t, "acme-corp/first-repo,acme-corp/second-repo", fake.lastUpdateFunctionEnvVars["PER_REPO_WIF_REPOS"])
+	assert.Equal(t, "acme-corp/first-repo,acme-corp/second-repo", fake.lastUpdateServiceEnvVars["PER_REPO_WIF_REPOS"])
 }
 
 func TestRegisterPerRepoWIF_Idempotent(t *testing.T) {
@@ -2694,7 +2702,7 @@ func TestRegisterPerRepoWIF_Idempotent(t *testing.T) {
 	p := NewProvisioner(Config{ProjectID: "proj1", Region: "us-central1"}, fake)
 	err := p.RegisterPerRepoWIF(context.Background(), "acme-corp/my-service")
 	require.NoError(t, err)
-	assert.NotContains(t, fake.calls, "UpdateFunctionEnvVars")
+	assert.NotContains(t, fake.calls, "UpdateServiceEnvVars")
 }
 
 func TestRegisterPerRepoWIF_FunctionNotFound(t *testing.T) {
@@ -2717,7 +2725,7 @@ func TestRegisterPerRepoWIF_LowercasesRepo(t *testing.T) {
 	p := NewProvisioner(Config{ProjectID: "proj1", Region: "us-central1"}, fake)
 	err := p.RegisterPerRepoWIF(context.Background(), "Acme-Corp/My-Service")
 	require.NoError(t, err)
-	assert.Equal(t, "acme-corp/my-service", fake.lastUpdateFunctionEnvVars["PER_REPO_WIF_REPOS"])
+	assert.Equal(t, "acme-corp/my-service", fake.lastUpdateServiceEnvVars["PER_REPO_WIF_REPOS"])
 }
 
 func TestRegisterPerRepoWIF_RejectsInvalidFormat(t *testing.T) {
@@ -2749,7 +2757,7 @@ func TestRegisterPerRepoWIF_NilEnvVars(t *testing.T) {
 	p := NewProvisioner(Config{ProjectID: "proj1", Region: "us-central1"}, fake)
 	err := p.RegisterPerRepoWIF(context.Background(), "acme-corp/my-service")
 	require.NoError(t, err)
-	assert.Equal(t, "acme-corp/my-service", fake.lastUpdateFunctionEnvVars["PER_REPO_WIF_REPOS"])
+	assert.Equal(t, "acme-corp/my-service", fake.lastUpdateServiceEnvVars["PER_REPO_WIF_REPOS"])
 }
 
 func TestRegisterPerRepoWIF_GetFunctionError(t *testing.T) {
@@ -2779,21 +2787,21 @@ func TestRemoveOrgFromMint_RemovesOrgAndRoles(t *testing.T) {
 	err := p.RemoveOrgFromMint(context.Background(), "acme")
 	require.NoError(t, err)
 
-	assert.Contains(t, fake.calls, "UpdateFunctionEnvVars")
-	assert.Contains(t, fake.calls, "WaitForOperation")
+	assert.Contains(t, fake.calls, "UpdateServiceEnvVars")
+	assert.NotContains(t, fake.calls, "WaitForOperation")
 
 	// acme should be removed from ALLOWED_ORGS.
-	assert.Equal(t, "other-org", fake.lastUpdateFunctionEnvVars["ALLOWED_ORGS"])
+	assert.Equal(t, "other-org", fake.lastUpdateServiceEnvVars["ALLOWED_ORGS"])
 
 	// acme entries should be removed from ROLE_APP_IDS.
 	var roleAppIDs map[string]string
-	require.NoError(t, json.Unmarshal([]byte(fake.lastUpdateFunctionEnvVars["ROLE_APP_IDS"]), &roleAppIDs))
+	require.NoError(t, json.Unmarshal([]byte(fake.lastUpdateServiceEnvVars["ROLE_APP_IDS"]), &roleAppIDs))
 	assert.NotContains(t, roleAppIDs, "acme/coder")
 	assert.NotContains(t, roleAppIDs, "acme/triage")
 	assert.Equal(t, "333", roleAppIDs["other-org/coder"])
 
 	// ALLOWED_ROLES should be re-derived.
-	assert.Equal(t, "coder", fake.lastUpdateFunctionEnvVars["ALLOWED_ROLES"])
+	assert.Equal(t, "coder", fake.lastUpdateServiceEnvVars["ALLOWED_ROLES"])
 }
 
 func TestRemoveOrgFromMint_FunctionNotFound(t *testing.T) {
@@ -2830,7 +2838,7 @@ func TestRemoveOrgFromMint_LowercasesOrg(t *testing.T) {
 	err := p.RemoveOrgFromMint(context.Background(), "ACME")
 	require.NoError(t, err)
 
-	assert.Equal(t, "", fake.lastUpdateFunctionEnvVars["ALLOWED_ORGS"])
+	assert.Equal(t, "", fake.lastUpdateServiceEnvVars["ALLOWED_ORGS"])
 }
 
 func TestRemoveOrgFromMint_UpdateFails(t *testing.T) {
@@ -2842,7 +2850,7 @@ func TestRemoveOrgFromMint_UpdateFails(t *testing.T) {
 			"ROLE_APP_IDS": `{"acme/coder":"111"}`,
 		},
 	}
-	fake.errs["UpdateFunctionEnvVars"] = fmt.Errorf("permission denied")
+	fake.errs["UpdateServiceEnvVars"] = fmt.Errorf("permission denied")
 
 	p := NewProvisioner(Config{ProjectID: "proj1", Region: "us-central1"}, fake)
 	err := p.RemoveOrgFromMint(context.Background(), "acme")
@@ -2865,8 +2873,8 @@ func TestRemoveRepoFromMint_RemovesRepo(t *testing.T) {
 	err := p.RemoveRepoFromMint(context.Background(), "acme/first")
 	require.NoError(t, err)
 
-	assert.Contains(t, fake.calls, "UpdateFunctionEnvVars")
-	assert.Equal(t, "acme/second", fake.lastUpdateFunctionEnvVars["PER_REPO_WIF_REPOS"])
+	assert.Contains(t, fake.calls, "UpdateServiceEnvVars")
+	assert.Equal(t, "acme/second", fake.lastUpdateServiceEnvVars["PER_REPO_WIF_REPOS"])
 }
 
 func TestRemoveRepoFromMint_LastRepo(t *testing.T) {
@@ -2882,7 +2890,7 @@ func TestRemoveRepoFromMint_LastRepo(t *testing.T) {
 	err := p.RemoveRepoFromMint(context.Background(), "acme/only")
 	require.NoError(t, err)
 
-	assert.Equal(t, "", fake.lastUpdateFunctionEnvVars["PER_REPO_WIF_REPOS"])
+	assert.Equal(t, "", fake.lastUpdateServiceEnvVars["PER_REPO_WIF_REPOS"])
 }
 
 func TestRemoveRepoFromMint_FunctionNotFound(t *testing.T) {
@@ -2908,7 +2916,7 @@ func TestRemoveRepoFromMint_LowercasesRepo(t *testing.T) {
 	err := p.RemoveRepoFromMint(context.Background(), "Acme/Widget")
 	require.NoError(t, err)
 
-	assert.Equal(t, "", fake.lastUpdateFunctionEnvVars["PER_REPO_WIF_REPOS"])
+	assert.Equal(t, "", fake.lastUpdateServiceEnvVars["PER_REPO_WIF_REPOS"])
 }
 
 // --- DisablePEMSecrets tests ---
