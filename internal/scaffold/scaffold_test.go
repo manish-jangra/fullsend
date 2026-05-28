@@ -374,6 +374,14 @@ func TestCodeAgentContent(t *testing.T) {
 	assert.Contains(t, s, "code-implementation")
 }
 
+func TestCodeImplementationSkillAPIContractGuidance(t *testing.T) {
+	content, err := FullsendRepoFile("skills/code-implementation/SKILL.md")
+	require.NoError(t, err)
+	s := string(content)
+	assert.Contains(t, s, "Verify API contracts per code path")
+	assert.Contains(t, s, "or changes a parameter sent to an external API")
+}
+
 func TestCodeWorkflowContent(t *testing.T) {
 	content, err := FullsendRepoFile(".github/workflows/code.yml")
 	require.NoError(t, err)
