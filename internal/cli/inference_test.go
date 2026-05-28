@@ -153,6 +153,24 @@ func TestInferenceProvisionCmd_RejectsInvalidOrgName(t *testing.T) {
 	assert.Contains(t, err.Error(), "invalid")
 }
 
+func TestInferenceProvisionCmd_RejectsPlaceholderOrg(t *testing.T) {
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"inference", "provision", "x0fullsend0placeholder",
+		"--project", "my-project"})
+	err := cmd.Execute()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "cannot provision reserved placeholder org")
+}
+
+func TestInferenceProvisionCmd_RejectsPlaceholderOrgInRepoMode(t *testing.T) {
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"inference", "provision", "x0fullsend0placeholder/somerepo",
+		"--project", "my-project"})
+	err := cmd.Execute()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "cannot provision reserved placeholder org")
+}
+
 func TestInferenceProvisionCmd_RejectsInvalidRepoFormat(t *testing.T) {
 	cmd := newRootCmd()
 	cmd.SetArgs([]string{"inference", "provision", "acme/",
@@ -442,6 +460,15 @@ func TestInferenceDeprovisionCmd_DryRunRepoSucceeds(t *testing.T) {
 func TestInferenceDeprovisionCmd_RejectsPlaceholderOrg(t *testing.T) {
 	cmd := newRootCmd()
 	cmd.SetArgs([]string{"inference", "deprovision", "x0fullsend0placeholder",
+		"--project", "my-project"})
+	err := cmd.Execute()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "cannot deprovision reserved placeholder org")
+}
+
+func TestInferenceDeprovisionCmd_RejectsPlaceholderOrgInRepoMode(t *testing.T) {
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"inference", "deprovision", "x0fullsend0placeholder/somerepo",
 		"--project", "my-project"})
 	err := cmd.Execute()
 	require.Error(t, err)

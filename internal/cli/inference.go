@@ -95,6 +95,10 @@ WIF pools are always created at locations/global.`,
 				return fmt.Errorf("--provider is not supported in repo-scoped mode (provider ID is auto-generated from owner/repo)")
 			}
 
+			if org == gcf.PlaceholderOrg {
+				return fmt.Errorf("cannot provision reserved placeholder org %q", org)
+			}
+
 			printer := ui.New(cmd.OutOrStdout())
 
 			if dryRun {
@@ -447,7 +451,7 @@ the GCP console or via gcloud.`,
 				return fmt.Errorf("--provider is not supported in repo-scoped mode (provider ID is auto-generated from owner/repo)")
 			}
 
-			if repo == "" && org == gcf.PlaceholderOrg {
+			if org == gcf.PlaceholderOrg {
 				return fmt.Errorf("cannot deprovision reserved placeholder org %q", org)
 			}
 
