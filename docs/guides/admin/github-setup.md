@@ -240,7 +240,7 @@ This removes the `.fullsend` config repo, org variables (`FULLSEND_MINT_URL`), a
 ```
 fullsend admin install <org>
   ├── mint deploy + mint enroll      → fullsend mint deploy + fullsend mint enroll <org>
-  ├── inference provision + enroll   → fullsend inference provision <org> + fullsend inference enroll <org>
+  ├── inference provision + enroll   ≈ fullsend inference provision <org> + fullsend inference enroll <org>
   └── github setup                   → fullsend github setup <org> --mint-url=... --inference-wif-provider=...
 ```
 

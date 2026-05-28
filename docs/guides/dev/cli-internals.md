@@ -47,7 +47,7 @@ The `admin install` command performs all setup in a single invocation. The `mint
 | `admin install` Phase | Standalone Command | Required Access |
 |-----------------------|--------------------|-----------------|
 | Phases 1-3: Mint provisioning | `fullsend mint deploy` + `fullsend mint enroll` | GCP project (mint) |
-| Phase 4: WIF provisioning | `fullsend inference provision` + `fullsend inference enroll` | GCP project (inference) |
+| Phase 4: WIF provisioning | `fullsend inference provision` + `fullsend inference enroll` (equivalent) | GCP project (inference) |
 | Phases 5-7: GitHub setup + enrollment | `fullsend github setup` | GitHub only |
 
 The typical handoff: a GCP admin runs `mint deploy`, `mint enroll`, `inference provision`, and `inference enroll`, then passes the mint URL and WIF provider resource name to a GitHub maintainer who runs `github setup --mint-url=... --inference-wif-provider=...`. See [Setting up with pre-provisioned infrastructure](../admin/github-setup.md).

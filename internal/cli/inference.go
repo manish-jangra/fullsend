@@ -438,6 +438,9 @@ Repo-scoped enrollment is handled by 'inference provision' directly.`,
 			}
 
 			org := strings.ToLower(args[0])
+			if strings.Contains(org, "/") {
+				return fmt.Errorf("inference enroll operates on orgs only; for repo-scoped WIF, use 'inference provision <owner/repo>'")
+			}
 			if err := validateOrgName(org); err != nil {
 				return err
 			}
@@ -457,7 +460,7 @@ Repo-scoped enrollment is handled by 'inference provision' directly.`,
 
 	cmd.Flags().StringVar(&project, "project", "", "GCP project ID for Vertex AI (required)")
 	cmd.Flags().StringVar(&pool, "pool", "fullsend-pool", "WIF pool name")
-	cmd.Flags().StringVar(&provider, "provider", "github-oidc", "WIF provider name")
+	cmd.Flags().StringVar(&provider, "provider", "github-oidc", "WIF provider name (org-scoped only)")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "preview changes without making them")
 
 	return cmd
@@ -545,6 +548,9 @@ the GCP console or via gcloud.`,
 			}
 
 			org := strings.ToLower(args[0])
+			if strings.Contains(org, "/") {
+				return fmt.Errorf("inference unenroll operates on orgs only; for repo-scoped WIF, use 'inference provision <owner/repo>'")
+			}
 			if err := validateOrgName(org); err != nil {
 				return err
 			}
@@ -564,7 +570,7 @@ the GCP console or via gcloud.`,
 
 	cmd.Flags().StringVar(&project, "project", "", "GCP project ID for Vertex AI (required)")
 	cmd.Flags().StringVar(&pool, "pool", "fullsend-pool", "WIF pool name")
-	cmd.Flags().StringVar(&provider, "provider", "github-oidc", "WIF provider name")
+	cmd.Flags().StringVar(&provider, "provider", "github-oidc", "WIF provider name (org-scoped only)")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "preview changes without making them")
 
 	return cmd
