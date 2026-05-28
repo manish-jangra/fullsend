@@ -389,6 +389,24 @@ func TestInferenceStatusCmd_RejectsProviderInRepoMode(t *testing.T) {
 	assert.Contains(t, err.Error(), "--provider is not supported in repo-scoped mode")
 }
 
+func TestInferenceStatusCmd_RejectsPlaceholderOrg(t *testing.T) {
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"inference", "status", "x0fullsend0placeholder",
+		"--project", "my-project"})
+	err := cmd.Execute()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "cannot check status of reserved placeholder org")
+}
+
+func TestInferenceStatusCmd_RejectsPlaceholderOrgInRepoMode(t *testing.T) {
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"inference", "status", "x0fullsend0placeholder/somerepo",
+		"--project", "my-project"})
+	err := cmd.Execute()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "cannot check status of reserved placeholder org")
+}
+
 func TestInferenceProvisionCmd_RejectsProviderInRepoMode(t *testing.T) {
 	cmd := newRootCmd()
 	cmd.SetArgs([]string{"inference", "provision", "acme/widget",

@@ -246,6 +246,10 @@ Use --format=json to get a machine-readable status + config output.`,
 				return fmt.Errorf("--provider is not supported in repo-scoped mode (provider ID is auto-generated from owner/repo)")
 			}
 
+			if org == gcf.PlaceholderOrg {
+				return fmt.Errorf("cannot check status of reserved placeholder org %q", org)
+			}
+
 			return runInferenceStatus(cmd, org, repo, project, pool, provider, format)
 		},
 	}

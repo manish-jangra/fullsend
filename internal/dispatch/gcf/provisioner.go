@@ -1158,6 +1158,9 @@ func (p *Provisioner) ensureWIFPoolAndProvider(ctx context.Context, installingOr
 		for org := range merged {
 			allOrgs = append(allOrgs, org)
 		}
+		if len(allOrgs) == 0 {
+			allOrgs = []string{PlaceholderOrg}
+		}
 	}
 	sort.Strings(allOrgs)
 
