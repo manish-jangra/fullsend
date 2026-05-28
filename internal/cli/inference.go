@@ -441,6 +441,9 @@ Repo-scoped enrollment is handled by 'inference provision' directly.`,
 			if err := validateOrgName(org); err != nil {
 				return err
 			}
+			if org == gcf.PlaceholderOrg {
+				return fmt.Errorf("cannot enroll reserved placeholder org %q", org)
+			}
 
 			printer := ui.New(cmd.OutOrStdout())
 
@@ -544,6 +547,9 @@ the GCP console or via gcloud.`,
 			org := strings.ToLower(args[0])
 			if err := validateOrgName(org); err != nil {
 				return err
+			}
+			if org == gcf.PlaceholderOrg {
+				return fmt.Errorf("cannot unenroll reserved placeholder org %q", org)
 			}
 
 			printer := ui.New(cmd.OutOrStdout())

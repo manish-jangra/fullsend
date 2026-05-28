@@ -420,6 +420,15 @@ func TestInferenceEnrollCmd_RejectsInvalidProjectID(t *testing.T) {
 	}
 }
 
+func TestInferenceEnrollCmd_RejectsPlaceholderOrg(t *testing.T) {
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"inference", "enroll", "x0fullsend0placeholder",
+		"--project", "my-project"})
+	err := cmd.Execute()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "cannot enroll reserved placeholder org")
+}
+
 func TestInferenceEnrollCmd_RejectsInvalidOrgName(t *testing.T) {
 	cmd := newRootCmd()
 	cmd.SetArgs([]string{"inference", "enroll", "-invalid",
@@ -506,6 +515,15 @@ func TestInferenceUnenrollCmd_RejectsInvalidProjectID(t *testing.T) {
 			assert.Contains(t, err.Error(), "invalid GCP project ID")
 		})
 	}
+}
+
+func TestInferenceUnenrollCmd_RejectsPlaceholderOrg(t *testing.T) {
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"inference", "unenroll", "x0fullsend0placeholder",
+		"--project", "my-project"})
+	err := cmd.Execute()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "cannot unenroll reserved placeholder org")
 }
 
 func TestInferenceUnenrollCmd_RejectsInvalidOrgName(t *testing.T) {
