@@ -1767,6 +1767,10 @@ func TestRunUninstall_NoBrowserOpenInCI(t *testing.T) {
 	output := buf.String()
 	assert.Contains(t, output, "Delete manually at:")
 	assert.Contains(t, output, "fullsend-ai-coder")
+	// NopBrowser.Open returns nil, so the warning should never appear.
+	// DefaultBrowser.Open would fail in a headless environment, producing
+	// this warning — its absence proves NopBrowser was injected.
+	assert.NotContains(t, output, "Could not open browser")
 }
 
 func TestInstallCmd_SkipMintCheckStillValidatesWIFProvider(t *testing.T) {
