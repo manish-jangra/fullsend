@@ -781,6 +781,34 @@ func TestRunEnableRepos_SkipsVariableSyncWhenNotOIDCMint(t *testing.T) {
 	assert.Nil(t, client.OrgVariableRepoIDs)
 }
 
+func TestRunEnableRepos_VariableSyncErrorDoesNotBlockEnable(t *testing.T) {
+	// When SetOrgVariableRepos fails, the enable command should still
+	// succeed (best-effort contract).
+	cfg := setupTestConfig(map[string]bool{
+		"web-app": false,
+	})
+	cfg.Dispatch.Mode = "oidc-mint"
+
+	client := setupTestClient("testorg", cfg, []string{"web-app"})
+	for i := range client.Repos {
+		switch client.Repos[i].Name {
+		case ".fullsend":
+			client.Repos[i].ID = 100
+		case "web-app":
+			client.Repos[i].ID = 200
+		}
+	}
+	client.OrgVariables = map[string]bool{"testorg/FULLSEND_MINT_URL": true}
+	client.Errors = map[string]error{
+		"SetOrgVariableRepos": fmt.Errorf("API rate limit exceeded"),
+	}
+
+	printer := ui.New(&discardWriter{})
+
+	err := runEnableRepos(context.Background(), client, printer, "testorg", []string{"web-app"}, false, true)
+	require.NoError(t, err, "enable should succeed even when variable sync fails")
+}
+
 func TestRunEnableRepos_SkipsVariableSyncWhenVariableNotExists(t *testing.T) {
 	// When the org variable doesn't exist yet (mint not provisioned),
 	// sync should skip gracefully.

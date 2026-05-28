@@ -2227,22 +2227,25 @@ func runEnableRepos(ctx context.Context, client forge.Client, printer *ui.Printe
 
 	if changed == 0 {
 		printer.StepInfo("All specified repositories are already enabled")
-		return nil
-	}
-	printer.StepDone(fmt.Sprintf("Updated %d repositories in config.yaml", changed))
+	} else {
+		printer.StepDone(fmt.Sprintf("Updated %d repositories in config.yaml", changed))
 
-	// Save updated config.
-	commitMsg := fmt.Sprintf("chore: enable %d repositories for fullsend enrollment", changed)
-	if err := saveRepoConfig(ctx, client, printer, org, cfg, commitMsg); err != nil {
-		return err
+		// Save updated config.
+		commitMsg := fmt.Sprintf("chore: enable %d repositories for fullsend enrollment", changed)
+		if err := saveRepoConfig(ctx, client, printer, org, cfg, commitMsg); err != nil {
+			return err
+		}
 	}
 
-	// Sync org variable visibility so newly enrolled repos can read
-	// dispatch variables like FULLSEND_MINT_URL. Without this, the
-	// shim workflow in the new repo fails because the org variable
-	// has "selected" visibility that doesn't include the new repo.
+	// Sync org variable visibility so enrolled repos can read dispatch
+	// variables like FULLSEND_MINT_URL. Runs even when changed == 0 to
+	// reconcile a previously failed best-effort sync on re-run.
 	if cfg.Dispatch.Mode == "oidc-mint" {
 		syncOrgVariableVisibility(ctx, client, printer, org, cfg, allOrgRepos)
+	}
+
+	if changed == 0 {
+		return nil
 	}
 
 	printer.Blank()
@@ -2256,10 +2259,8 @@ func runEnableRepos(ctx context.Context, client forge.Client, printer *ui.Printe
 }
 
 // dispatchOrgVariableNames returns the org-level variable names managed by the
-// dispatch layer. This is kept in sync with the gcf.Provisioner.OrgVariableNames()
-// method. We avoid importing the gcf package here to keep the CLI layer thin;
-// adding a variable to the dispatcher requires updating this list.
-var dispatchOrgVariableNames = []string{"FULLSEND_MINT_URL"}
+// dispatch layer, derived from the gcf provisioner to stay in sync automatically.
+var dispatchOrgVariableNames = gcf.NewProvisioner(gcf.Config{}, nil).OrgVariableNames()
 
 // syncOrgVariableVisibility updates the "selected" repository list for each
 // dispatch org variable so that all currently enrolled repos (plus the config
@@ -2267,25 +2268,19 @@ var dispatchOrgVariableNames = []string{"FULLSEND_MINT_URL"}
 // but do not fail the enable command, because the repo-maintenance workflow
 // can reconcile this later.
 func syncOrgVariableVisibility(ctx context.Context, client forge.Client, printer *ui.Printer, org string, cfg *config.OrgConfig, allOrgRepos []forge.Repository) {
-	// Build a name→ID lookup from the discovered org repos.
-	repoIDByName := make(map[string]int64, len(allOrgRepos))
-	for _, r := range allOrgRepos {
-		repoIDByName[r.Name] = r.ID
-	}
-
 	// Collect IDs for all enabled repos.
 	enrolledRepoIDs := collectEnrolledRepoIDs(allOrgRepos, cfg.EnabledRepos())
 
 	// Ensure the config repo (.fullsend) is included — it needs access
 	// to dispatch variables for its own workflows.
-	configRepo, err := client.GetRepo(ctx, org, forge.ConfigRepoName)
-	if err == nil && configRepo != nil {
-		seen := make(map[int64]bool, len(enrolledRepoIDs))
-		for _, id := range enrolledRepoIDs {
-			seen[id] = true
-		}
-		if !seen[configRepo.ID] {
-			enrolledRepoIDs = append(enrolledRepoIDs, configRepo.ID)
+	seen := make(map[int64]bool, len(enrolledRepoIDs))
+	for _, id := range enrolledRepoIDs {
+		seen[id] = true
+	}
+	for _, r := range allOrgRepos {
+		if r.Name == forge.ConfigRepoName && !seen[r.ID] {
+			enrolledRepoIDs = append(enrolledRepoIDs, r.ID)
+			break
 		}
 	}
 
@@ -2400,6 +2395,16 @@ func runDisableRepos(ctx context.Context, client forge.Client, printer *ui.Print
 	commitMsg := fmt.Sprintf("chore: disable %d repositories from fullsend enrollment", changed)
 	if err := saveRepoConfig(ctx, client, printer, org, cfg, commitMsg); err != nil {
 		return err
+	}
+
+	// Sync org variable visibility to revoke access for disabled repos.
+	if cfg.Dispatch.Mode == "oidc-mint" {
+		allOrgRepos, listErr := client.ListOrgRepos(ctx, org)
+		if listErr != nil {
+			printer.StepWarn(fmt.Sprintf("could not list org repos for variable sync: %v", listErr))
+		} else {
+			syncOrgVariableVisibility(ctx, client, printer, org, cfg, allOrgRepos)
+		}
 	}
 
 	printer.Blank()
