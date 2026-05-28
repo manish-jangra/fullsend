@@ -329,7 +329,7 @@ func runMintEnrollOrg(ctx context.Context, printer *ui.Printer, org, project, re
 		fmt.Sprintf("Organization: %s", org),
 		fmt.Sprintf("Roles: %s", strings.Join(roleList, ", ")),
 		fmt.Sprintf("Mint URL: %s", discovery.URL),
-		fmt.Sprintf("Next: fullsend inference enroll %s --project=%s", org, project),
+		fmt.Sprintf("Next: fullsend inference enroll %s --project=<inference-gcp-project>", org),
 		fmt.Sprintf("Then: fullsend admin install %s --mint-url=%s --skip-mint-check", org, discovery.URL),
 	})
 

@@ -1183,6 +1183,7 @@ func (p *Provisioner) GrantOrgVertexAIAccess(ctx context.Context, org string) er
 }
 
 func (p *Provisioner) grantOrgVertexAIAccessWithNumber(ctx context.Context, projectNumber, org string) error {
+	org = strings.ToLower(org)
 	principal := fmt.Sprintf("principalSet://iam.googleapis.com/projects/%s/locations/global/workloadIdentityPools/%s/attribute.repository/%s/.fullsend",
 		projectNumber, p.cfg.WIFPoolName, org)
 	if err := p.gcpAPI.SetProjectIAMBinding(ctx, p.cfg.ProjectID, principal, "roles/aiplatform.user"); err != nil {
@@ -1191,18 +1192,8 @@ func (p *Provisioner) grantOrgVertexAIAccessWithNumber(ctx context.Context, proj
 	return nil
 }
 
-func (p *Provisioner) grantRepoVertexAIAccess(ctx context.Context, repo string) error {
-	repo = strings.ToLower(repo)
-
-	projectNumber, err := p.gcpAPI.GetProjectNumber(ctx, p.cfg.ProjectID)
-	if err != nil {
-		return fmt.Errorf("getting project number: %w", err)
-	}
-
-	return p.grantRepoVertexAIAccessWithNumber(ctx, projectNumber, repo)
-}
-
 func (p *Provisioner) grantRepoVertexAIAccessWithNumber(ctx context.Context, projectNumber, repo string) error {
+	repo = strings.ToLower(repo)
 	principal := fmt.Sprintf("principalSet://iam.googleapis.com/projects/%s/locations/global/workloadIdentityPools/%s/attribute.repository/%s",
 		projectNumber, p.cfg.WIFPoolName, repo)
 	if err := p.gcpAPI.SetProjectIAMBinding(ctx, p.cfg.ProjectID, principal, "roles/aiplatform.user"); err != nil {
