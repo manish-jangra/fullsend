@@ -1108,7 +1108,11 @@ func newUninstallCmd() *cobra.Command {
 				}
 			}
 
-			return runUninstall(ctx, client, printer, org, appSet)
+			var browser appsetup.BrowserOpener = appsetup.DefaultBrowser{}
+			if os.Getenv("CI") != "" {
+				browser = appsetup.NopBrowser{}
+			}
+			return runUninstall(ctx, client, printer, org, appSet, browser)
 		},
 	}
 
@@ -1605,7 +1609,7 @@ func runInstall(ctx context.Context, client forge.Client, printer *ui.Printer, o
 }
 
 // runUninstall tears down the fullsend installation.
-func runUninstall(ctx context.Context, client forge.Client, printer *ui.Printer, org, appSet string) error {
+func runUninstall(ctx context.Context, client forge.Client, printer *ui.Printer, org, appSet string, browser appsetup.BrowserOpener) error {
 	// Try to load agent slugs from existing config. If the .fullsend repo
 	// is already gone (e.g., previous partial uninstall), fall back to the
 	// default naming convention so we can still guide the user to delete
@@ -1729,10 +1733,6 @@ func runUninstall(ctx context.Context, client forge.Client, printer *ui.Printer,
 			printer.StepInfo("Click 'Delete GitHub App' on each page, then return here.")
 			printer.Blank()
 
-			var browser appsetup.BrowserOpener = appsetup.DefaultBrowser{}
-			if os.Getenv("CI") != "" {
-				browser = appsetup.NopBrowser{}
-			}
 			for _, slug := range existingSlugs {
 				deleteURL := fmt.Sprintf("https://github.com/organizations/%s/settings/apps/%s/advanced", org, slug)
 				printer.StepStart(fmt.Sprintf("Opening %s settings...", slug))

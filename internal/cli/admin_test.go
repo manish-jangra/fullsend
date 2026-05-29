@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/fullsend-ai/fullsend/internal/appsetup"
 	"github.com/fullsend-ai/fullsend/internal/config"
 	"github.com/fullsend-ai/fullsend/internal/forge"
 	"github.com/fullsend-ai/fullsend/internal/layers"
@@ -1668,7 +1669,7 @@ func TestRunUninstall_LegacySlugsIncludedWhenConfigUnavailable(t *testing.T) {
 	var buf strings.Builder
 	printer := ui.New(&buf)
 
-	err := runUninstall(context.Background(), client, printer, "test-org", "fullsend-ai")
+	err := runUninstall(context.Background(), client, printer, "test-org", "fullsend-ai", appsetup.NopBrowser{})
 	require.NoError(t, err)
 
 	output := buf.String()
@@ -1691,7 +1692,7 @@ func TestRunUninstall_WarnsWhenNoAppsFound(t *testing.T) {
 	var buf strings.Builder
 	printer := ui.New(&buf)
 
-	err := runUninstall(context.Background(), client, printer, "test-org", "fullsend-ai")
+	err := runUninstall(context.Background(), client, printer, "test-org", "fullsend-ai", appsetup.NopBrowser{})
 	require.NoError(t, err)
 
 	output := buf.String()
@@ -1712,7 +1713,7 @@ func TestRunUninstall_LegacySlugsSkippedWhenAppSetMatchesLegacy(t *testing.T) {
 	var buf strings.Builder
 	printer := ui.New(&buf)
 
-	err := runUninstall(context.Background(), client, printer, "test-org", "fullsend")
+	err := runUninstall(context.Background(), client, printer, "test-org", "fullsend", appsetup.NopBrowser{})
 	require.NoError(t, err)
 
 	output := buf.String()
@@ -1738,7 +1739,7 @@ func TestRunUninstall_DedupsSlugsAcrossAppSets(t *testing.T) {
 
 	// Use "fullsend" which matches a legacy prefix — without dedup,
 	// each slug would appear twice.
-	err := runUninstall(context.Background(), client, printer, "test-org", "fullsend")
+	err := runUninstall(context.Background(), client, printer, "test-org", "fullsend", appsetup.NopBrowser{})
 	require.NoError(t, err)
 
 	output := buf.String()
@@ -1747,9 +1748,7 @@ func TestRunUninstall_DedupsSlugsAcrossAppSets(t *testing.T) {
 	assert.Equal(t, 1, strings.Count(output, "Opening fullsend-triage settings"))
 }
 
-func TestRunUninstall_NoBrowserOpenInCI(t *testing.T) {
-	t.Setenv("CI", "true")
-
+func TestRunUninstall_NopBrowserSkipsBrowserOpen(t *testing.T) {
 	client := forge.NewFakeClient()
 	client.TokenScopes = []string{"admin:org", "repo", "delete_repo"}
 	client.Errors["GetFileContent"] = errors.New("not found")
@@ -1761,15 +1760,13 @@ func TestRunUninstall_NoBrowserOpenInCI(t *testing.T) {
 	var buf strings.Builder
 	printer := ui.New(&buf)
 
-	err := runUninstall(context.Background(), client, printer, "test-org", "fullsend-ai")
+	err := runUninstall(context.Background(), client, printer, "test-org", "fullsend-ai", appsetup.NopBrowser{})
 	require.NoError(t, err)
 
 	output := buf.String()
 	// NopBrowser.Open returns nil, so the success path runs.
 	assert.Contains(t, output, "Opened fullsend-ai-coder")
 	assert.Contains(t, output, "fullsend-ai-coder/advanced")
-	// DefaultBrowser.Open would fail in a headless environment, producing
-	// this warning — its absence proves NopBrowser was injected.
 	assert.NotContains(t, output, "Could not open browser")
 }
 
