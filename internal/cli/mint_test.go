@@ -286,6 +286,24 @@ func TestVerifyPEMMatchesApp_WrongKey(t *testing.T) {
 	assert.Contains(t, err.Error(), "does not match")
 }
 
+func TestVerifyPEMMatchesApp_AppIDMismatch(t *testing.T) {
+	testPEM := generateTestPEM(t)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprintln(w, `{"id": 99999, "slug": "different-app"}`)
+	}))
+	defer srv.Close()
+
+	orig := githubAPIBaseURL
+	githubAPIBaseURL = srv.URL
+	defer func() { githubAPIBaseURL = orig }()
+
+	err := verifyPEMMatchesApp(context.Background(), testPEM, 12345, "test-app")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "authenticated as app 99999 but expected app 12345")
+}
+
 // --- listPEMFiles tests ---
 
 func TestListPEMFiles(t *testing.T) {
