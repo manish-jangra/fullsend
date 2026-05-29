@@ -126,7 +126,7 @@ Inference authentication uses GCP Workload Identity Federation (WIF) to allow Gi
 │  │ GCP Security Token Service (STS)│                        │
 │  │                                 │                        │
 │  │ WIF Pool: fullsend-inference     │                        │
-│  │ WIF Provider: fullsend-github   │                        │
+│  │ WIF Provider: github-oidc       │                        │
 │  │                                 │                        │
 │  │ Validates OIDC issuer:          │                        │
 │  │   token.actions.githubusercontent.com                    │
@@ -243,7 +243,7 @@ The GCF provisioner handles full GCP infrastructure deployment:
 │  └─────────┬─────────┘                                          │
 │            ▼                                                    │
 │  ┌───────────────────┐                                          │
-│  │ Create WIF        │ fullsend-github                          │
+│  │ Create WIF        │ github-oidc                              │
 │  │ Provider          │ OIDC issuer:                             │
 │  │                   │   token.actions.githubusercontent.com    │
 │  │                   │ (skip if exists)                         │
