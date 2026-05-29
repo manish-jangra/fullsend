@@ -1108,7 +1108,11 @@ func newUninstallCmd() *cobra.Command {
 				}
 			}
 
-			return runUninstall(ctx, client, printer, org, appSet)
+			var browser appsetup.BrowserOpener = appsetup.DefaultBrowser{}
+			if os.Getenv("CI") != "" {
+				browser = appsetup.NopBrowser{}
+			}
+			return runUninstall(ctx, client, printer, org, appSet, browser)
 		},
 	}
 
@@ -1605,7 +1609,7 @@ func runInstall(ctx context.Context, client forge.Client, printer *ui.Printer, o
 }
 
 // runUninstall tears down the fullsend installation.
-func runUninstall(ctx context.Context, client forge.Client, printer *ui.Printer, org, appSet string) error {
+func runUninstall(ctx context.Context, client forge.Client, printer *ui.Printer, org, appSet string, browser appsetup.BrowserOpener) error {
 	// Try to load agent slugs from existing config. If the .fullsend repo
 	// is already gone (e.g., previous partial uninstall), fall back to the
 	// default naming convention so we can still guide the user to delete
@@ -1642,6 +1646,20 @@ func runUninstall(ctx context.Context, client forge.Client, printer *ui.Printer,
 		if err != nil {
 			printer.StepInfo("Config repo unavailable; using default app names")
 		}
+	}
+
+	// Deduplicate slugs — legacy fallback can produce the same slug as the
+	// current app-set when the naming convention hasn't changed.
+	{
+		seen := make(map[string]bool, len(agentSlugs))
+		unique := agentSlugs[:0]
+		for _, slug := range agentSlugs {
+			if !seen[slug] {
+				seen[slug] = true
+				unique = append(unique, slug)
+			}
+		}
+		agentSlugs = unique
 	}
 
 	// Build the dispatch layer based on detected mode.
@@ -1715,7 +1733,6 @@ func runUninstall(ctx context.Context, client forge.Client, printer *ui.Printer,
 			printer.StepInfo("Click 'Delete GitHub App' on each page, then return here.")
 			printer.Blank()
 
-			browser := appsetup.DefaultBrowser{}
 			for _, slug := range existingSlugs {
 				deleteURL := fmt.Sprintf("https://github.com/organizations/%s/settings/apps/%s/advanced", org, slug)
 				printer.StepStart(fmt.Sprintf("Opening %s settings...", slug))
@@ -1723,7 +1740,7 @@ func runUninstall(ctx context.Context, client forge.Client, printer *ui.Printer,
 					printer.StepWarn(fmt.Sprintf("Could not open browser: %v", err))
 					printer.StepInfo(fmt.Sprintf("  Delete manually at: %s", deleteURL))
 				} else {
-					printer.StepDone(fmt.Sprintf("Opened %s", slug))
+					printer.StepDone(fmt.Sprintf("Opened %s — %s", slug, deleteURL))
 				}
 			}
 			printer.Blank()
