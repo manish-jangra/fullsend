@@ -54,6 +54,8 @@ func cleanupStaleResources(ctx context.Context, client forge.Client, token, org 
 		if seedErr := client.CreateFile(ctx, org, testRepo, "README.md", "chore: initialize repo for e2e testing", []byte("# test-repo\n\nE2E test repository.\n")); seedErr != nil {
 			t.Logf("[cleanup] Warning: could not seed %s: %v", testRepo, seedErr)
 		}
+	} else if getErr != nil {
+		t.Logf("[cleanup] Warning: could not check README in %s: %v", testRepo, getErr)
 	}
 
 	// 4. Delete stale enrollment and unenrollment branches from test-repo.
