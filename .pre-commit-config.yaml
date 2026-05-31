@@ -90,6 +90,13 @@ repos:
         types: [go]
         pass_filenames: false
 
+      - id: lint-mint-embed-sync
+        name: lint mint embed sync
+        entry: ./hack/lint-mint-embed-sync
+        language: script
+        files: ^(internal/mint/|internal/dispatch/gcf/mintsrc/)
+        pass_filenames: false
+
       - id: lint-adr-status
         name: lint ADR statuses
         entry: ./hack/lint-adr-status

@@ -1,0 +1,26 @@
+#!/bin/bash
+
+# lint-mint-embed-sync - Verify that the mint Cloud Function source files
+# (main.go, go.mod, go.sum) match their embedded copies used for deployment.
+# See CLAUDE.md for details on the mint/embed sync requirement.
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+
+SRC="$REPO_ROOT/internal/mint"
+DST="$REPO_ROOT/internal/dispatch/gcf/mintsrc"
+
+rc=0
+for f in main.go go.mod go.sum; do
+    if ! diff -q "$SRC/$f" "$DST/$f.embed" >/dev/null 2>&1; then
+        echo "DESYNC: internal/mint/$f != internal/dispatch/gcf/mintsrc/$f.embed" >&2
+        rc=1
+    fi
+done
+
+if [[ $rc -eq 0 ]]; then
+    echo "OK: mint embed files in sync"
+fi
+exit $rc
