@@ -28,7 +28,7 @@ build_mock() {
 
   rm -rf "${mock_bin}"
   mkdir -p "${mock_bin}"
-  > "${gh_log}"
+  : > "${gh_log}"
 
   # Write the pr list output to a file so the mock can read it.
   printf '%s' "${pr_list_output}" > "${TMPDIR}/pr-list-output.txt"
