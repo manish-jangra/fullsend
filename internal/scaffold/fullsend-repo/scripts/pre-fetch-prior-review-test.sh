@@ -79,7 +79,7 @@ run_test() {
   local github_output="${TMPDIR}/github-output.txt"
   local workspace="${TMPDIR}/workspace"
   mkdir -p "${workspace}"
-  > "${github_output}"
+  : > "${github_output}"
 
   local exit_code=0
   env \
