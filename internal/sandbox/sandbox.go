@@ -536,6 +536,8 @@ func collectPodmanLogs(sandboxName string) string {
 
 // ExtractTranscripts copies Claude transcript files (.jsonl) from the sandbox
 // to a local output directory.
+//
+// Deprecated: use runtime.ClaudeRuntime.ExtractTranscripts via runtime.Default().
 func ExtractTranscripts(sandboxName, agentName, outputDir string) error {
 	if err := os.MkdirAll(outputDir, 0o755); err != nil {
 		return fmt.Errorf("creating output dir: %w", err)
