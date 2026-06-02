@@ -200,6 +200,10 @@ func buildRunCommand(params RunParams) string {
 	return strings.Join(parts, " ")
 }
 
+// Claude Code reads two settings.json files in the sandbox:
+//   - {CLAUDE_CONFIG_DIR}/settings.json — plugin marketplace state (bootstrapPlugins)
+//   - {SandboxWorkspace}/.claude/settings.json — security Pre/PostToolUse hooks (here)
+// Keep these paths separate; merging them would mix plugin config with hook wiring.
 func installClaudeHooks(sandboxName string, hooks security.ClaudeSandboxHooks) error {
 	hookFiles := security.HookFiles(hooks)
 	for name, content := range hookFiles {

@@ -23,6 +23,12 @@ func (b scanBootstrap) AgentPath() string    { return b.agentPath }
 func (b scanBootstrap) SkillDirs() []string  { return b.skillDirs }
 func (b scanBootstrap) PluginDirs() []string { return b.pluginDirs }
 
+func TestScanRuntimeContent_EmptyAgentPath(t *testing.T) {
+	err := scanRuntimeContent(scanBootstrap{}, true)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "agent path is required")
+}
+
 func TestScanRuntimeContent_AgentCriticalFailClosed(t *testing.T) {
 	dir := t.TempDir()
 	agentPath := filepath.Join(dir, "agent.md")

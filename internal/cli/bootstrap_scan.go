@@ -11,19 +11,30 @@ import (
 
 // scanRuntimeContent runs InputPipeline on agent definition, SKILL.md files, and plugin JSON.
 func scanRuntimeContent(input runtime.BootstrapInput, failClosed bool) error {
+	agentPath := input.AgentPath()
+	if agentPath == "" {
+		return fmt.Errorf("agent path is required for runtime content scan")
+	}
+
 	pipeline := security.InputPipeline()
 
-	if err := scanAgentFile(pipeline, input.AgentPath(), failClosed); err != nil {
+	if err := scanAgentFile(pipeline, agentPath, failClosed); err != nil {
 		return err
 	}
 
 	for _, skillPath := range input.SkillDirs() {
+		if skillPath == "" {
+			continue
+		}
 		if err := scanSkillDir(pipeline, skillPath, failClosed); err != nil {
 			return err
 		}
 	}
 
 	for _, pluginPath := range input.PluginDirs() {
+		if pluginPath == "" {
+			continue
+		}
 		if err := scanPluginDir(pipeline, pluginPath, failClosed); err != nil {
 			return err
 		}
