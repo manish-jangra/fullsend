@@ -347,10 +347,33 @@ func (p *Provisioner) EnsureOrgInMint(ctx context.Context, expectedURL string, o
 		return fmt.Errorf("mint URL mismatch: expected %q but function has %q", expectedURL, fn.URI)
 	}
 
+	// Read env vars from the traffic-serving Cloud Run revision rather than
+	// the Cloud Functions service template. Although UpdateServiceEnvVars now
+	// pins traffic to new revisions, divergence can still occur on partial
+	// failure or from historical deployments, causing reads via GetFunction
+	// to return stale or incomplete data.
+	trafficEnvVars, err := p.gcpAPI.GetServiceTrafficEnvVars(ctx, p.cfg.ProjectID, p.cfg.Region, functionName)
+	if err != nil {
+		return fmt.Errorf("reading traffic-serving env vars: %w", err)
+	}
+
+	// Defense-in-depth: cross-check ALLOWED_ORGS against ROLE_APP_IDS.
+	// If ALLOWED_ORGS is empty but ROLE_APP_IDS has entries for other orgs,
+	// the env var data is inconsistent (e.g., stale read from a diverged
+	// template). Abort rather than silently clobbering existing orgs.
+	allowedOrgs := trafficEnvVars["ALLOWED_ORGS"]
+	if allowedOrgs == "" {
+		if otherOrgs := otherOrgsInRoleAppIDs(trafficEnvVars["ROLE_APP_IDS"], org); len(otherOrgs) > 0 {
+			return fmt.Errorf(
+				"data inconsistency: ALLOWED_ORGS is empty but ROLE_APP_IDS contains entries for %s; "+
+					"this suggests env var data loss — run 'fullsend mint status --project=%s' to investigate",
+				strings.Join(otherOrgs, ", "), p.cfg.ProjectID)
+		}
+	}
+
 	needsUpdate := false
 
 	// Check ALLOWED_ORGS.
-	allowedOrgs := fn.EnvVars["ALLOWED_ORGS"]
 	orgPresent := false
 	for _, o := range strings.Split(allowedOrgs, ",") {
 		if strings.EqualFold(strings.TrimSpace(o), org) {
@@ -364,7 +387,7 @@ func (p *Provisioner) EnsureOrgInMint(ctx context.Context, expectedURL string, o
 
 	// Check ROLE_APP_IDS.
 	existingRoleAppIDs := make(map[string]string)
-	if raw := fn.EnvVars["ROLE_APP_IDS"]; raw != "" {
+	if raw := trafficEnvVars["ROLE_APP_IDS"]; raw != "" {
 		if err := json.Unmarshal([]byte(raw), &existingRoleAppIDs); err != nil {
 			return fmt.Errorf("parsing existing ROLE_APP_IDS: %w", err)
 		}
@@ -380,9 +403,9 @@ func (p *Provisioner) EnsureOrgInMint(ctx context.Context, expectedURL string, o
 		return nil
 	}
 
-	// Build updated env vars from existing function state.
-	updated := make(map[string]string, len(fn.EnvVars))
-	for k, v := range fn.EnvVars {
+	// Build updated env vars from the traffic-serving revision state.
+	updated := make(map[string]string, len(trafficEnvVars))
+	for k, v := range trafficEnvVars {
 		updated[k] = v
 	}
 
@@ -445,20 +468,24 @@ func (p *Provisioner) RegisterPerRepoWIF(ctx context.Context, repo string) error
 	if fn == nil {
 		return fmt.Errorf("mint function not found")
 	}
-	if fn.EnvVars == nil {
-		fn.EnvVars = make(map[string]string)
+
+	// Read env vars from the traffic-serving revision to avoid stale data
+	// on partial failure or historical divergence (same fix as EnsureOrgInMint).
+	trafficEnvVars, err := p.gcpAPI.GetServiceTrafficEnvVars(ctx, p.cfg.ProjectID, p.cfg.Region, functionName)
+	if err != nil {
+		return fmt.Errorf("reading traffic-serving env vars: %w", err)
 	}
 
 	repo = strings.ToLower(repo)
-	existing := fn.EnvVars["PER_REPO_WIF_REPOS"]
+	existing := trafficEnvVars["PER_REPO_WIF_REPOS"]
 	for _, entry := range strings.Split(existing, ",") {
 		if strings.ToLower(strings.TrimSpace(entry)) == repo {
 			return nil
 		}
 	}
 
-	updated := make(map[string]string, len(fn.EnvVars))
-	for k, v := range fn.EnvVars {
+	updated := make(map[string]string, len(trafficEnvVars))
+	for k, v := range trafficEnvVars {
 		updated[k] = v
 	}
 	if existing == "" {
@@ -950,11 +977,11 @@ func (p *Provisioner) provisionSelfManaged(ctx context.Context) (map[string]stri
 
 // mergeAllowedOrgs reads ALLOWED_ORGS from existing env vars and unions
 // with the desired env vars. Result is sorted and deduplicated.
+// An empty existing value is treated as an empty set (not a skip) so that
+// the desired orgs are always preserved — silently returning on empty
+// existing data would mask data loss when the source has diverged.
 func mergeAllowedOrgs(existing, desired map[string]string) {
 	prev := existing["ALLOWED_ORGS"]
-	if prev == "" {
-		return
-	}
 	seen := make(map[string]bool)
 	var merged []string
 	for _, org := range strings.Split(desired["ALLOWED_ORGS"], ",") {
@@ -975,17 +1002,53 @@ func mergeAllowedOrgs(existing, desired map[string]string) {
 	desired["ALLOWED_ORGS"] = strings.Join(merged, ",")
 }
 
+// otherOrgsInRoleAppIDs parses ROLE_APP_IDS JSON and returns a sorted list
+// of org names that differ from enrollingOrg. ROLE_APP_IDS keys are in the
+// format "org/role", so the org is extracted from the prefix before the first
+// slash. Returns nil if the JSON is empty or unparseable.
+func otherOrgsInRoleAppIDs(roleAppIDsJSON, enrollingOrg string) []string {
+	if roleAppIDsJSON == "" {
+		return nil
+	}
+	var m map[string]string
+	if err := json.Unmarshal([]byte(roleAppIDsJSON), &m); err != nil {
+		return nil
+	}
+	seen := make(map[string]bool)
+	for key := range m {
+		parts := strings.SplitN(key, "/", 2)
+		if len(parts) < 2 {
+			continue
+		}
+		orgName := parts[0]
+		if !strings.EqualFold(orgName, enrollingOrg) && !seen[orgName] {
+			seen[orgName] = true
+		}
+	}
+	if len(seen) == 0 {
+		return nil
+	}
+	orgs := make([]string, 0, len(seen))
+	for o := range seen {
+		orgs = append(orgs, o)
+	}
+	sort.Strings(orgs)
+	return orgs
+}
+
 // mergeRoleAppIDs reads ROLE_APP_IDS from existing env vars and merges with
 // desired. New org's entries are added; same org re-installing overwrites
 // its own entries.
+// An empty existing value is treated as an empty map (not a skip), consistent
+// with mergeAllowedOrgs — silently returning on empty existing data would
+// mask data loss when the source has diverged.
 func mergeRoleAppIDs(existing, desired map[string]string) {
 	prev := existing["ROLE_APP_IDS"]
-	if prev == "" {
-		return
-	}
-	var prevMap map[string]string
-	if err := json.Unmarshal([]byte(prev), &prevMap); err != nil {
-		return
+	prevMap := make(map[string]string)
+	if prev != "" {
+		if err := json.Unmarshal([]byte(prev), &prevMap); err != nil {
+			return
+		}
 	}
 	var desiredMap map[string]string
 	if err := json.Unmarshal([]byte(desired["ROLE_APP_IDS"]), &desiredMap); err != nil {
@@ -1500,14 +1563,21 @@ func (p *Provisioner) RemoveOrgFromMint(ctx context.Context, org string) error {
 		return fmt.Errorf("mint function %q not found in project %s region %s", functionName, p.cfg.ProjectID, p.cfg.Region)
 	}
 
-	updated := make(map[string]string, len(fn.EnvVars))
-	for k, v := range fn.EnvVars {
+	// Read env vars from the traffic-serving revision to avoid stale data
+	// on partial failure or historical divergence (same fix as EnsureOrgInMint).
+	trafficEnvVars, err := p.gcpAPI.GetServiceTrafficEnvVars(ctx, p.cfg.ProjectID, p.cfg.Region, functionName)
+	if err != nil {
+		return fmt.Errorf("reading traffic-serving env vars: %w", err)
+	}
+
+	updated := make(map[string]string, len(trafficEnvVars))
+	for k, v := range trafficEnvVars {
 		updated[k] = v
 	}
 
 	// Remove org from ALLOWED_ORGS.
 	var filteredOrgs []string
-	for _, o := range strings.Split(fn.EnvVars["ALLOWED_ORGS"], ",") {
+	for _, o := range strings.Split(trafficEnvVars["ALLOWED_ORGS"], ",") {
 		o = strings.TrimSpace(o)
 		if o != "" && !strings.EqualFold(o, org) {
 			filteredOrgs = append(filteredOrgs, o)
@@ -1518,7 +1588,7 @@ func (p *Provisioner) RemoveOrgFromMint(ctx context.Context, org string) error {
 
 	// Remove org entries from ROLE_APP_IDS.
 	existingRoleAppIDs := make(map[string]string)
-	if raw := fn.EnvVars["ROLE_APP_IDS"]; raw != "" {
+	if raw := trafficEnvVars["ROLE_APP_IDS"]; raw != "" {
 		if err := json.Unmarshal([]byte(raw), &existingRoleAppIDs); err != nil {
 			return fmt.Errorf("parsing existing ROLE_APP_IDS: %w", err)
 		}
@@ -1563,7 +1633,14 @@ func (p *Provisioner) RemoveRepoFromMint(ctx context.Context, repo string) error
 		return fmt.Errorf("mint function not found")
 	}
 
-	existing := fn.EnvVars["PER_REPO_WIF_REPOS"]
+	// Read env vars from the traffic-serving revision to avoid stale data
+	// on partial failure or historical divergence (same fix as EnsureOrgInMint).
+	trafficEnvVars, err := p.gcpAPI.GetServiceTrafficEnvVars(ctx, p.cfg.ProjectID, p.cfg.Region, functionName)
+	if err != nil {
+		return fmt.Errorf("reading traffic-serving env vars: %w", err)
+	}
+
+	existing := trafficEnvVars["PER_REPO_WIF_REPOS"]
 	var filtered []string
 	for _, entry := range strings.Split(existing, ",") {
 		entry = strings.TrimSpace(entry)
@@ -1572,8 +1649,8 @@ func (p *Provisioner) RemoveRepoFromMint(ctx context.Context, repo string) error
 		}
 	}
 
-	updated := make(map[string]string, len(fn.EnvVars))
-	for k, v := range fn.EnvVars {
+	updated := make(map[string]string, len(trafficEnvVars))
+	for k, v := range trafficEnvVars {
 		updated[k] = v
 	}
 	updated["PER_REPO_WIF_REPOS"] = strings.Join(filtered, ",")

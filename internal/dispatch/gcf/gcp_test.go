@@ -1565,6 +1565,300 @@ func TestLiveGCFClient_UpdateServiceEnvVars(t *testing.T) {
 	})
 }
 
+// --- GetServiceTrafficEnvVars ---
+
+func TestLiveGCFClient_GetServiceTrafficEnvVars(t *testing.T) {
+	t.Run("reads_from_traffic_serving_revision", func(t *testing.T) {
+		callCount := 0
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			callCount++
+			if callCount == 1 {
+				// GET service — template differs from traffic revision.
+				assert.Equal(t, http.MethodGet, r.Method)
+				assert.Contains(t, r.URL.Path, "/services/my-svc")
+				w.WriteHeader(http.StatusOK)
+				json.NewEncoder(w).Encode(map[string]interface{}{
+					"template": map[string]interface{}{
+						"containers": []interface{}{
+							map[string]interface{}{
+								"env": []interface{}{
+									map[string]string{"name": "ALLOWED_ORGS", "value": ""},
+								},
+							},
+						},
+					},
+					"trafficStatuses": []interface{}{
+						map[string]interface{}{
+							"type":     "TRAFFIC_TARGET_ALLOCATION_TYPE_REVISION",
+							"revision": "projects/proj/locations/us-central1/services/my-svc/revisions/my-svc-00001-abc",
+							"percent":  100,
+						},
+					},
+				})
+				return
+			}
+			// GET revision — has the real env vars.
+			assert.Equal(t, http.MethodGet, r.Method)
+			assert.Contains(t, r.URL.Path, "/revisions/my-svc-00001-abc")
+			w.WriteHeader(http.StatusOK)
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"containers": []interface{}{
+					map[string]interface{}{
+						"env": []interface{}{
+							map[string]string{"name": "ALLOWED_ORGS", "value": "org-a,org-b"},
+							map[string]string{"name": "ROLE_APP_IDS", "value": `{"org-a/coder":"1"}`},
+						},
+					},
+				},
+			})
+		}))
+		defer srv.Close()
+
+		envVars, err := newTestClient(srv).GetServiceTrafficEnvVars(context.Background(), "proj", "us-central1", "my-svc")
+		require.NoError(t, err)
+		assert.Equal(t, "org-a,org-b", envVars["ALLOWED_ORGS"])
+		assert.Equal(t, `{"org-a/coder":"1"}`, envVars["ROLE_APP_IDS"])
+		assert.Equal(t, 2, callCount)
+	})
+
+	t.Run("falls_back_to_template_when_no_traffic_routing", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusOK)
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"template": map[string]interface{}{
+					"containers": []interface{}{
+						map[string]interface{}{
+							"env": []interface{}{
+								map[string]string{"name": "ALLOWED_ORGS", "value": "org-a"},
+							},
+						},
+					},
+				},
+				"trafficStatuses": []interface{}{},
+			})
+		}))
+		defer srv.Close()
+
+		envVars, err := newTestClient(srv).GetServiceTrafficEnvVars(context.Background(), "proj", "us-central1", "my-svc")
+		require.NoError(t, err)
+		assert.Equal(t, "org-a", envVars["ALLOWED_ORGS"])
+	})
+
+	t.Run("service_not_found", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusNotFound)
+			fmt.Fprintln(w, `{"error":{"message":"not found"}}`)
+		}))
+		defer srv.Close()
+
+		_, err := newTestClient(srv).GetServiceTrafficEnvVars(context.Background(), "proj", "us-central1", "my-svc")
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "unexpected status 404")
+	})
+
+	t.Run("picks_highest_percent_revision_in_traffic_split", func(t *testing.T) {
+		callCount := 0
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			callCount++
+			if callCount == 1 {
+				w.WriteHeader(http.StatusOK)
+				json.NewEncoder(w).Encode(map[string]interface{}{
+					"template": map[string]interface{}{
+						"containers": []interface{}{map[string]interface{}{}},
+					},
+					"trafficStatuses": []interface{}{
+						map[string]interface{}{
+							"type":     "TRAFFIC_TARGET_ALLOCATION_TYPE_REVISION",
+							"revision": "projects/proj/locations/us-central1/services/my-svc/revisions/canary-rev",
+							"percent":  10,
+						},
+						map[string]interface{}{
+							"type":     "TRAFFIC_TARGET_ALLOCATION_TYPE_REVISION",
+							"revision": "projects/proj/locations/us-central1/services/my-svc/revisions/stable-rev",
+							"percent":  90,
+						},
+					},
+				})
+				return
+			}
+			// Should fetch the 90% revision, not the 10% canary.
+			assert.Contains(t, r.URL.Path, "/revisions/stable-rev")
+			w.WriteHeader(http.StatusOK)
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"containers": []interface{}{
+					map[string]interface{}{
+						"env": []interface{}{
+							map[string]string{"name": "ALLOWED_ORGS", "value": "org-a"},
+						},
+					},
+				},
+			})
+		}))
+		defer srv.Close()
+
+		envVars, err := newTestClient(srv).GetServiceTrafficEnvVars(context.Background(), "proj", "us-central1", "my-svc")
+		require.NoError(t, err)
+		assert.Equal(t, "org-a", envVars["ALLOWED_ORGS"])
+		assert.Equal(t, 2, callCount)
+	})
+
+	t.Run("falls_back_to_template_for_latest_type_with_no_revision", func(t *testing.T) {
+		// TRAFFIC_TARGET_ALLOCATION_TYPE_LATEST entries in trafficStatuses
+		// should have resolved revision names. But if for some reason the
+		// revision is empty (e.g., during reconciliation), fall back to template.
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusOK)
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"template": map[string]interface{}{
+					"containers": []interface{}{
+						map[string]interface{}{
+							"env": []interface{}{
+								map[string]string{"name": "ALLOWED_ORGS", "value": "template-org"},
+							},
+						},
+					},
+				},
+				"trafficStatuses": []interface{}{
+					map[string]interface{}{
+						"type":     "TRAFFIC_TARGET_ALLOCATION_TYPE_LATEST",
+						"revision": "",
+						"percent":  100,
+					},
+				},
+			})
+		}))
+		defer srv.Close()
+
+		envVars, err := newTestClient(srv).GetServiceTrafficEnvVars(context.Background(), "proj", "us-central1", "my-svc")
+		require.NoError(t, err)
+		assert.Equal(t, "template-org", envVars["ALLOWED_ORGS"])
+	})
+
+	t.Run("skips_zero_percent_traffic_entries", func(t *testing.T) {
+		callCount := 0
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			callCount++
+			if callCount == 1 {
+				w.WriteHeader(http.StatusOK)
+				json.NewEncoder(w).Encode(map[string]interface{}{
+					"template": map[string]interface{}{
+						"containers": []interface{}{map[string]interface{}{}},
+					},
+					"trafficStatuses": []interface{}{
+						map[string]interface{}{
+							"revision": "projects/proj/locations/us-central1/services/my-svc/revisions/old-rev",
+							"percent":  0,
+						},
+						map[string]interface{}{
+							"revision": "projects/proj/locations/us-central1/services/my-svc/revisions/active-rev",
+							"percent":  100,
+						},
+					},
+				})
+				return
+			}
+			assert.Contains(t, r.URL.Path, "/revisions/active-rev")
+			w.WriteHeader(http.StatusOK)
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"containers": []interface{}{
+					map[string]interface{}{
+						"env": []interface{}{
+							map[string]string{"name": "ALLOWED_ORGS", "value": "active-org"},
+						},
+					},
+				},
+			})
+		}))
+		defer srv.Close()
+
+		envVars, err := newTestClient(srv).GetServiceTrafficEnvVars(context.Background(), "proj", "us-central1", "my-svc")
+		require.NoError(t, err)
+		assert.Equal(t, "active-org", envVars["ALLOWED_ORGS"])
+	})
+
+	t.Run("errors_on_empty_containers_in_revision", func(t *testing.T) {
+		callCount := 0
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			callCount++
+			if callCount == 1 {
+				w.WriteHeader(http.StatusOK)
+				json.NewEncoder(w).Encode(map[string]interface{}{
+					"template": map[string]interface{}{
+						"containers": []interface{}{map[string]interface{}{}},
+					},
+					"trafficStatuses": []interface{}{
+						map[string]interface{}{
+							"revision": "projects/proj/locations/us-central1/services/my-svc/revisions/empty-rev",
+							"percent":  100,
+						},
+					},
+				})
+				return
+			}
+			w.WriteHeader(http.StatusOK)
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"containers": []interface{}{},
+			})
+		}))
+		defer srv.Close()
+
+		_, err := newTestClient(srv).GetServiceTrafficEnvVars(context.Background(), "proj", "us-central1", "my-svc")
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "has no containers")
+	})
+
+	t.Run("errors_on_invalid_revision_name_format", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusOK)
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"template": map[string]interface{}{
+					"containers": []interface{}{map[string]interface{}{}},
+				},
+				"trafficStatuses": []interface{}{
+					map[string]interface{}{
+						"revision": "../../../evil-path",
+						"percent":  100,
+					},
+				},
+			})
+		}))
+		defer srv.Close()
+
+		_, err := newTestClient(srv).GetServiceTrafficEnvVars(context.Background(), "proj", "us-central1", "my-svc")
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "unexpected traffic revision name format")
+	})
+
+	t.Run("revision_fetch_error", func(t *testing.T) {
+		callCount := 0
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			callCount++
+			if callCount == 1 {
+				w.WriteHeader(http.StatusOK)
+				json.NewEncoder(w).Encode(map[string]interface{}{
+					"template": map[string]interface{}{
+						"containers": []interface{}{map[string]interface{}{}},
+					},
+					"trafficStatuses": []interface{}{
+						map[string]interface{}{
+							"revision": "projects/proj/locations/us-central1/services/my-svc/revisions/rev-1",
+							"percent":  100,
+						},
+					},
+				})
+				return
+			}
+			w.WriteHeader(http.StatusInternalServerError)
+			fmt.Fprintln(w, `{"error":{"message":"internal error"}}`)
+		}))
+		defer srv.Close()
+
+		_, err := newTestClient(srv).GetServiceTrafficEnvVars(context.Background(), "proj", "us-central1", "my-svc")
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "unexpected status 500")
+	})
+}
+
 // --- WaitForOperation ---
 
 func TestLiveGCFClient_WaitForOperation(t *testing.T) {
