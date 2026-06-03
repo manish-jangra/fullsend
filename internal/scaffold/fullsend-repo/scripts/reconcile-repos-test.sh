@@ -23,6 +23,12 @@ version: 1
 repos:
   test-repo:
     enabled: true
+  new-repo:
+    enabled: true
+  refresh-repo:
+    enabled: true
+  removed-repo:
+    enabled: false
 EOF
 
 cat > "${CONFIG_DIR}/templates/shim-workflow-call.yaml" <<'EOF'
@@ -42,9 +48,9 @@ cat > "${MOCK_BIN}/yq" <<'EOF'
 #!/usr/bin/env bash
 query="${1:-}"
 if [[ "$query" == *"enabled == true"* ]]; then
-  echo "test-repo"
+  printf '%s\n' "test-repo" "new-repo" "refresh-repo"
 elif [[ "$query" == *"enabled == false"* ]]; then
-  :
+  echo "removed-repo"
 else
   echo "unexpected yq query: $*" >&2
   exit 1
@@ -61,12 +67,39 @@ for arg in "\$@"; do
 done
 printf '\n' >> "${GH_LOG}"
 
-if [[ "\$1" == "pr" && "\$2" == "list" ]]; then
-  for arg in "\$@"; do
-    if [[ "\$arg" == "fullsend/onboard" ]]; then
-      echo "https://github.com/test-org/test-repo/pull/18"
-    fi
-  done
+# Handle pr subcommands.
+if [[ "\$1" == "pr" ]]; then
+  case "\$2" in
+    list)
+      # Parse --repo and --head to differentiate responses.
+      repo_arg=""
+      head_arg=""
+      prev=""
+      for arg in "\$@"; do
+        case "\$prev" in
+          --repo) repo_arg="\$arg" ;;
+          --head) head_arg="\$arg" ;;
+        esac
+        prev="\$arg"
+      done
+      if [[ "\$head_arg" == "fullsend/onboard" ]]; then
+        case "\$repo_arg" in
+          test-org/test-repo)
+            echo "https://github.com/test-org/test-repo/pull/18" ;;
+          test-org/refresh-repo)
+            echo "https://github.com/test-org/refresh-repo/pull/5" ;;
+        esac
+      fi
+      exit 0
+      ;;
+    create)
+      echo "https://github.com/test-org/mock/pull/99"
+      exit 0
+      ;;
+    close)
+      exit 0
+      ;;
+  esac
   exit 0
 fi
 
@@ -75,16 +108,24 @@ if [[ "\$1" != "api" ]]; then
   exit 1
 fi
 
-# Extract --jq filter and --input if present.
+# Extract flags from the gh api call.
 jq_filter=""
 has_input=false
+method="GET"
+field_message=""
 shift  # consume "api"
 endpoint="\$1"; shift
 while [[ \$# -gt 0 ]]; do
   case "\$1" in
     --jq) jq_filter="\$2"; shift 2 ;;
     --input) has_input=true; shift 2 ;;  # consume --input -
-    --method|--field) shift 2 ;;
+    --method) method="\$2"; shift 2 ;;
+    --field)
+      if [[ "\$2" == message=* ]]; then
+        field_message="\${2#message=}"
+      fi
+      shift 2
+      ;;
     --silent) shift ;;
     *) shift ;;
   esac
@@ -102,40 +143,57 @@ fi
 json=""
 rc=0
 case "\$endpoint" in
-  repos/test-org/test-repo/actions/variables/*)
-    # Variable not found — 404.
+  repos/test-org/*/actions/variables/*)
+    # Variable not found — 404 for all test repos.
     json='{"status":"404","message":"Not Found"}'
     rc=1
     ;;
-  repos/test-org/test-repo/contents/.github/workflows/fullsend.yaml)
+  repos/test-org/test-repo/contents/*)
+    # test-repo: stale shim exists on default branch.
     json='{"content":"c3RhbGUgc2hpbSB0ZW1wbGF0ZQo=","sha":"file-sha"}'
     ;;
-  repos/test-org/test-repo)
-    json='{"default_branch":"main","private":false}'
+  repos/test-org/removed-repo/contents/*)
+    if [[ "\$method" == "DELETE" ]]; then
+      # Capture the removal commit message for validation.
+      if [[ -n "\$field_message" ]]; then
+        removal_json=\$(jq -n --arg msg "\$field_message" '{message: \$msg}')
+        printf '%s\0' "\$removal_json" >> "${COMMIT_MSGS_LOG}"
+      fi
+    else
+      # Shim exists — return content and SHA for GET requests.
+      json='{"content":"c3RhbGUgc2hpbSB0ZW1wbGF0ZQo=","sha":"remove-file-sha"}'
+    fi
     ;;
-  repos/test-org/test-repo/git/ref/heads/main)
-    json='{"object":{"sha":"base-sha"}}'
-    ;;
-  repos/test-org/test-repo/git/commits/base-sha)
-    json='{"tree":{"sha":"base-tree-sha"}}'
-    ;;
-  repos/test-org/test-repo/git/blobs)
-    json='{"sha":"blob-sha"}'
-    ;;
-  repos/test-org/test-repo/git/trees)
-    json='{"sha":"tree-sha"}'
-    ;;
-  repos/test-org/test-repo/git/commits)
-    json='{"sha":"desired-commit-sha"}'
-    ;;
-  repos/test-org/test-repo/git/refs)
+  repos/test-org/*/contents/*)
+    # new-repo, refresh-repo: no shim on default branch.
     rc=1
     ;;
-  repos/test-org/test-repo/git/refs/heads/fullsend/onboard)
+  repos/test-org/*/git/ref/heads/*)
+    json='{"object":{"sha":"base-sha"}}'
+    ;;
+  repos/test-org/*/git/commits/base-sha)
+    json='{"tree":{"sha":"base-tree-sha"}}'
+    ;;
+  repos/test-org/*/git/blobs)
+    json='{"sha":"blob-sha"}'
+    ;;
+  repos/test-org/*/git/trees)
+    json='{"sha":"tree-sha"}'
+    ;;
+  repos/test-org/*/git/commits)
+    json='{"sha":"desired-commit-sha"}'
+    ;;
+  repos/test-org/*/git/refs)
+    # Branch creation — fail so the script falls back to PATCH.
+    rc=1
+    ;;
+  repos/test-org/*/git/refs/heads/*)
+    # Branch update or delete — always succeed.
     rc=0
     ;;
-  repos/test-org/test-repo/git/refs/heads/fullsend/offboard)
-    rc=0
+  repos/test-org/*)
+    # Repo metadata (default branch, visibility).
+    json='{"default_branch":"main","private":false}'
     ;;
   *)
     echo "unexpected gh api endpoint: \$endpoint" >&2
@@ -190,7 +248,8 @@ if [ ! -f "${COMMIT_MSGS_LOG}" ]; then
   exit 1
 fi
 
-# The log contains null-delimited JSON payloads from git/commits calls.
+# The log contains null-delimited JSON payloads from git/commits calls
+# and Contents API DELETE calls (removal path).
 # Extract each message and verify it has a subject, blank line, and body.
 msg_index=0
 fail=0
