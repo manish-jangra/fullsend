@@ -244,12 +244,31 @@ runs:
         openshell gateway add http://127.0.0.1:8080 --local --name local
         openshell gateway select local
 
+    - name: Restore cached sandbox image
+      id: sandbox-cache
+      uses: actions/cache@v4
+      with:
+        path: /tmp/sandbox-image.tar
+        key: sandbox-image-${{ runner.os }}-${{ runner.arch }}
+
+    - name: Load cached sandbox image
+      if: steps.sandbox-cache.outputs.cache-hit == 'true'
+      shell: bash
+      run: podman load -i /tmp/sandbox-image.tar
+
     - name: Pre-pull sandbox image
       shell: bash
       run: |
         IMAGE="${FULLSEND_SANDBOX_IMAGE:-ghcr.io/fullsend-ai/fullsend-code:latest}"
         echo "Pre-pulling sandbox image: ${IMAGE}"
         timeout 300 podman pull -- "${IMAGE}" || echo "::warning::Image pre-pull failed; sandbox create will pull on demand"
+
+    - name: Save sandbox image for cache
+      if: steps.sandbox-cache.outputs.cache-hit != 'true'
+      shell: bash
+      run: |
+        IMAGE="${FULLSEND_SANDBOX_IMAGE:-ghcr.io/fullsend-ai/fullsend-code:latest}"
+        podman save -o /tmp/sandbox-image.tar "${IMAGE}"
 
     - name: Install validation dependencies
       shell: bash
