@@ -348,10 +348,10 @@ func (p *Provisioner) EnsureOrgInMint(ctx context.Context, expectedURL string, o
 	}
 
 	// Read env vars from the traffic-serving Cloud Run revision rather than
-	// the Cloud Functions service template. When UpdateServiceEnvVars creates
-	// a new revision without routing traffic, the template diverges from the
-	// revision actually serving requests, causing reads via GetFunction to
-	// return stale or incomplete data.
+	// the Cloud Functions service template. Although UpdateServiceEnvVars now
+	// pins traffic to new revisions, divergence can still occur on partial
+	// failure or from historical deployments, causing reads via GetFunction
+	// to return stale or incomplete data.
 	trafficEnvVars, err := p.gcpAPI.GetServiceTrafficEnvVars(ctx, p.cfg.ProjectID, p.cfg.Region, functionName)
 	if err != nil {
 		return fmt.Errorf("reading traffic-serving env vars: %w", err)
@@ -470,7 +470,7 @@ func (p *Provisioner) RegisterPerRepoWIF(ctx context.Context, repo string) error
 	}
 
 	// Read env vars from the traffic-serving revision to avoid stale data
-	// when the service template has diverged (same fix as EnsureOrgInMint).
+	// on partial failure or historical divergence (same fix as EnsureOrgInMint).
 	trafficEnvVars, err := p.gcpAPI.GetServiceTrafficEnvVars(ctx, p.cfg.ProjectID, p.cfg.Region, functionName)
 	if err != nil {
 		return fmt.Errorf("reading traffic-serving env vars: %w", err)
@@ -1564,7 +1564,7 @@ func (p *Provisioner) RemoveOrgFromMint(ctx context.Context, org string) error {
 	}
 
 	// Read env vars from the traffic-serving revision to avoid stale data
-	// when the service template has diverged (same fix as EnsureOrgInMint).
+	// on partial failure or historical divergence (same fix as EnsureOrgInMint).
 	trafficEnvVars, err := p.gcpAPI.GetServiceTrafficEnvVars(ctx, p.cfg.ProjectID, p.cfg.Region, functionName)
 	if err != nil {
 		return fmt.Errorf("reading traffic-serving env vars: %w", err)
@@ -1634,7 +1634,7 @@ func (p *Provisioner) RemoveRepoFromMint(ctx context.Context, repo string) error
 	}
 
 	// Read env vars from the traffic-serving revision to avoid stale data
-	// when the service template has diverged (same fix as EnsureOrgInMint).
+	// on partial failure or historical divergence (same fix as EnsureOrgInMint).
 	trafficEnvVars, err := p.gcpAPI.GetServiceTrafficEnvVars(ctx, p.cfg.ProjectID, p.cfg.Region, functionName)
 	if err != nil {
 		return fmt.Errorf("reading traffic-serving env vars: %w", err)

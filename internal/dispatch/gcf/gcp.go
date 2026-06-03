@@ -1337,8 +1337,9 @@ var revisionNamePattern = regexp.MustCompile(`^projects/[^/]+/locations/[^/]+/se
 
 // GetServiceTrafficEnvVars reads environment variables from the Cloud Run
 // revision that is currently serving traffic, rather than from the service
-// template. When UpdateServiceEnvVars creates a new revision without routing
-// traffic to it, the service template and the traffic-serving revision diverge.
+// template. Although UpdateServiceEnvVars now pins traffic to the new
+// revision, divergence can still occur if the traffic PATCH fails (partial
+// failure) or from historical deployments before traffic pinning was added.
 // This method resolves that by finding the revision that has traffic allocated
 // and reading its container env vars directly.
 //
