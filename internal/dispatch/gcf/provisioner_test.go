@@ -78,6 +78,12 @@ type fakeGCFClient struct {
 	// Captured env vars from the last UpdateServiceEnvVars call.
 	lastUpdateServiceEnvVars map[string]string
 
+	// updateServiceRevision is returned alongside the error from
+	// UpdateServiceEnvVars. Non-empty simulates a partial failure where
+	// the template PATCH succeeded (creating a revision) but the traffic
+	// PATCH failed.
+	updateServiceRevision string
+
 	// Captured project IAM binding arguments.
 	projectIAMBindings []projectIAMBinding
 }
@@ -232,10 +238,10 @@ func (f *fakeGCFClient) UpdateFunctionEnvVars(_ context.Context, _, _, _ string,
 	}
 	return "operations/envvar-update-789", nil
 }
-func (f *fakeGCFClient) UpdateServiceEnvVars(_ context.Context, _, _, _ string, envVars map[string]string) error {
+func (f *fakeGCFClient) UpdateServiceEnvVars(_ context.Context, _, _, _ string, envVars map[string]string) (string, error) {
 	f.calls = append(f.calls, "UpdateServiceEnvVars")
 	f.lastUpdateServiceEnvVars = envVars
-	return f.errs["UpdateServiceEnvVars"]
+	return f.updateServiceRevision, f.errs["UpdateServiceEnvVars"]
 }
 func (f *fakeGCFClient) WaitForOperation(_ context.Context, _ string) error {
 	return f.record("WaitForOperation")
@@ -2508,6 +2514,27 @@ func TestEnsureOrgInMint_UpdateFails(t *testing.T) {
 	assert.Contains(t, err.Error(), "updating mint env vars")
 }
 
+func TestEnsureOrgInMint_PartialFailureSurfacesRevision(t *testing.T) {
+	fake := newFakeGCFClient()
+	fake.functionInfo = &FunctionInfo{
+		URI: "https://mint.example.com",
+		EnvVars: map[string]string{
+			"ALLOWED_ORGS": "existing-org",
+			"ROLE_APP_IDS": `{"existing-org/coder":"100"}`,
+		},
+	}
+	fake.errs["UpdateServiceEnvVars"] = fmt.Errorf("traffic routing failed")
+	fake.updateServiceRevision = "fullsend-mint-00115-abc"
+
+	p := NewProvisioner(Config{ProjectID: "proj1", Region: "us-central1"}, fake)
+	err := p.EnsureOrgInMint(context.Background(), "https://mint.example.com", "new-org", map[string]string{
+		"new-org/coder": "200",
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "revision fullsend-mint-00115-abc created but traffic routing may have failed")
+	assert.Contains(t, err.Error(), "traffic routing failed")
+}
+
 func TestEnsureOrgInMint_EmptyRoleAppIDs(t *testing.T) {
 	fake := newFakeGCFClient()
 	fake.functionInfo = &FunctionInfo{
@@ -2751,6 +2778,22 @@ func TestRegisterPerRepoWIF_GetFunctionError(t *testing.T) {
 	assert.Contains(t, err.Error(), "getting mint function")
 }
 
+func TestRegisterPerRepoWIF_PartialFailureSurfacesRevision(t *testing.T) {
+	fake := newFakeGCFClient()
+	fake.functionInfo = &FunctionInfo{
+		URI:     "https://mint.example.com",
+		EnvVars: map[string]string{},
+	}
+	fake.errs["UpdateServiceEnvVars"] = fmt.Errorf("traffic routing failed")
+	fake.updateServiceRevision = "fullsend-mint-00116-def"
+
+	p := NewProvisioner(Config{ProjectID: "proj1", Region: "us-central1"}, fake)
+	err := p.RegisterPerRepoWIF(context.Background(), "acme-corp/my-service")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "revision fullsend-mint-00116-def created but traffic routing may have failed")
+	assert.Contains(t, err.Error(), "traffic routing failed")
+}
+
 // --- RemoveOrgFromMint tests ---
 
 func TestRemoveOrgFromMint_RemovesOrgAndRoles(t *testing.T) {
@@ -2839,6 +2882,25 @@ func TestRemoveOrgFromMint_UpdateFails(t *testing.T) {
 	assert.Contains(t, err.Error(), "removing org from mint env vars")
 }
 
+func TestRemoveOrgFromMint_PartialFailureSurfacesRevision(t *testing.T) {
+	fake := newFakeGCFClient()
+	fake.functionInfo = &FunctionInfo{
+		URI: "https://mint.example.com",
+		EnvVars: map[string]string{
+			"ALLOWED_ORGS": "acme",
+			"ROLE_APP_IDS": `{"acme/coder":"111"}`,
+		},
+	}
+	fake.errs["UpdateServiceEnvVars"] = fmt.Errorf("traffic routing failed")
+	fake.updateServiceRevision = "fullsend-mint-00117-ghi"
+
+	p := NewProvisioner(Config{ProjectID: "proj1", Region: "us-central1"}, fake)
+	err := p.RemoveOrgFromMint(context.Background(), "acme")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "revision fullsend-mint-00117-ghi created but traffic routing may have failed")
+	assert.Contains(t, err.Error(), "traffic routing failed")
+}
+
 // --- RemoveRepoFromMint tests ---
 
 func TestRemoveRepoFromMint_RemovesRepo(t *testing.T) {
@@ -2898,6 +2960,24 @@ func TestRemoveRepoFromMint_LowercasesRepo(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.Equal(t, "", fake.lastUpdateServiceEnvVars["PER_REPO_WIF_REPOS"])
+}
+
+func TestRemoveRepoFromMint_PartialFailureSurfacesRevision(t *testing.T) {
+	fake := newFakeGCFClient()
+	fake.functionInfo = &FunctionInfo{
+		URI: "https://mint.example.com",
+		EnvVars: map[string]string{
+			"PER_REPO_WIF_REPOS": "acme/first,acme/second",
+		},
+	}
+	fake.errs["UpdateServiceEnvVars"] = fmt.Errorf("traffic routing failed")
+	fake.updateServiceRevision = "fullsend-mint-00118-jkl"
+
+	p := NewProvisioner(Config{ProjectID: "proj1", Region: "us-central1"}, fake)
+	err := p.RemoveRepoFromMint(context.Background(), "acme/first")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "revision fullsend-mint-00118-jkl created but traffic routing may have failed")
+	assert.Contains(t, err.Error(), "traffic routing failed")
 }
 
 // --- DisablePEMSecrets tests ---

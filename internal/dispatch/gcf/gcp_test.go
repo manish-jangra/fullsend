@@ -802,18 +802,120 @@ func TestLiveGCFClient_UpdateFunctionEnvVars(t *testing.T) {
 // --- UpdateServiceEnvVars ---
 
 func TestLiveGCFClient_UpdateServiceEnvVars(t *testing.T) {
+	// Helper: standard service GET response.
+	serviceWithRevision := func(rev string) map[string]interface{} {
+		return map[string]interface{}{
+			"template": map[string]interface{}{
+				"revision": rev,
+				"containers": []interface{}{
+					map[string]interface{}{
+						"image": "gcr.io/proj/mint:latest",
+						"env":   []interface{}{},
+					},
+				},
+			},
+		}
+	}
+
+	// Helper: service GET response after template update, with latestCreatedRevision.
+	serviceAfterUpdate := func(rev string) map[string]interface{} {
+		return map[string]interface{}{
+			"latestCreatedRevision": rev,
+			"template": map[string]interface{}{
+				"revision": rev,
+				"containers": []interface{}{
+					map[string]interface{}{
+						"image": "gcr.io/proj/mint:latest",
+						"env":   []interface{}{},
+					},
+				},
+			},
+		}
+	}
+
 	t.Run("success_immediate", func(t *testing.T) {
+		// Flow: GET → PATCH template (done) → GET (discover rev) → PATCH traffic (done)
 		callCount := 0
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			callCount++
-			if callCount == 1 {
+			switch callCount {
+			case 1:
 				// GET current service
 				assert.Equal(t, http.MethodGet, r.Method)
 				assert.Contains(t, r.URL.Path, "/services/my-svc")
 				w.WriteHeader(http.StatusOK)
+				json.NewEncoder(w).Encode(serviceWithRevision("my-svc-00042-abc"))
+			case 2:
+				// PATCH template — no traffic in updateMask
+				assert.Equal(t, http.MethodPatch, r.Method)
+				assert.Contains(t, r.URL.RawQuery, "updateMask=template.revision,template.containers")
+				assert.NotContains(t, r.URL.RawQuery, "traffic")
+
+				var body map[string]interface{}
+				json.NewDecoder(r.Body).Decode(&body)
+				tmpl := body["template"].(map[string]interface{})
+				_, hasRevision := tmpl["revision"]
+				assert.False(t, hasRevision, "revision should be stripped to avoid 409 conflict")
+				containers := tmpl["containers"].([]interface{})
+				container := containers[0].(map[string]interface{})
+				envs := container["env"].([]interface{})
+				assert.Len(t, envs, 1)
+				env := envs[0].(map[string]interface{})
+				assert.Equal(t, "ALLOWED_ORGS", env["name"])
+				assert.Equal(t, "org1", env["value"])
+
+				// Verify traffic is NOT in the template PATCH payload.
+				_, hasTraffic := body["traffic"]
+				assert.False(t, hasTraffic, "traffic should not be in the template PATCH")
+
+				w.WriteHeader(http.StatusOK)
+				json.NewEncoder(w).Encode(map[string]interface{}{"done": true})
+			case 3:
+				// GET to discover new revision
+				assert.Equal(t, http.MethodGet, r.Method)
+				w.WriteHeader(http.StatusOK)
+				json.NewEncoder(w).Encode(serviceAfterUpdate("my-svc-00043-def"))
+			case 4:
+				// PATCH traffic — pin to new revision
+				assert.Equal(t, http.MethodPatch, r.Method)
+				assert.Contains(t, r.URL.RawQuery, "updateMask=traffic")
+
+				var body map[string]interface{}
+				json.NewDecoder(r.Body).Decode(&body)
+				traffic := body["traffic"].([]interface{})
+				require.Len(t, traffic, 1)
+				entry := traffic[0].(map[string]interface{})
+				assert.Equal(t, "TRAFFIC_TARGET_ALLOCATION_TYPE_REVISION", entry["type"])
+				assert.Equal(t, "my-svc-00043-def", entry["revision"])
+				assert.Equal(t, float64(100), entry["percent"])
+
+				w.WriteHeader(http.StatusOK)
+				json.NewEncoder(w).Encode(map[string]interface{}{"done": true})
+			}
+		}))
+		defer srv.Close()
+
+		rev, err := newTestClient(srv).UpdateServiceEnvVars(context.Background(), "proj", "us-central1", "my-svc", map[string]string{
+			"ALLOWED_ORGS": "org1",
+		})
+		require.NoError(t, err)
+		assert.Equal(t, "my-svc-00043-def", rev)
+		assert.Equal(t, 4, callCount)
+	})
+
+	t.Run("success_overrides_pinned_traffic", func(t *testing.T) {
+		// When a Cloud Functions deploy pins traffic to a specific revision,
+		// UpdateServiceEnvVars must create a new revision and pin traffic to it.
+		callCount := 0
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			callCount++
+			switch callCount {
+			case 1:
+				// GET returns service with traffic pinned to a specific revision
+				w.WriteHeader(http.StatusOK)
 				json.NewEncoder(w).Encode(map[string]interface{}{
 					"template": map[string]interface{}{
-						"revision": "my-svc-00042-abc",
+						"revision": "my-svc-00105-sqw",
 						"containers": []interface{}{
 							map[string]interface{}{
 								"image": "gcr.io/proj/mint:latest",
@@ -821,43 +923,65 @@ func TestLiveGCFClient_UpdateServiceEnvVars(t *testing.T) {
 							},
 						},
 					},
+					"traffic": []interface{}{
+						map[string]interface{}{
+							"type":     "TRAFFIC_TARGET_ALLOCATION_TYPE_REVISION",
+							"revision": "my-svc-00105-sqw",
+							"percent":  100,
+						},
+					},
 				})
-				return
+			case 2:
+				// PATCH template — traffic field should be removed from payload
+				assert.Equal(t, http.MethodPatch, r.Method)
+				assert.NotContains(t, r.URL.RawQuery, "traffic")
+
+				var body map[string]interface{}
+				json.NewDecoder(r.Body).Decode(&body)
+				_, hasTraffic := body["traffic"]
+				assert.False(t, hasTraffic, "traffic should be removed from template PATCH")
+
+				w.WriteHeader(http.StatusOK)
+				json.NewEncoder(w).Encode(map[string]interface{}{"done": true})
+			case 3:
+				// GET to discover new revision
+				w.WriteHeader(http.StatusOK)
+				json.NewEncoder(w).Encode(serviceAfterUpdate("my-svc-00106-xyz"))
+			case 4:
+				// PATCH traffic — pin to NEW revision (not the old one)
+				assert.Equal(t, http.MethodPatch, r.Method)
+				assert.Contains(t, r.URL.RawQuery, "updateMask=traffic")
+
+				var body map[string]interface{}
+				json.NewDecoder(r.Body).Decode(&body)
+				traffic := body["traffic"].([]interface{})
+				require.Len(t, traffic, 1)
+				entry := traffic[0].(map[string]interface{})
+				assert.Equal(t, "TRAFFIC_TARGET_ALLOCATION_TYPE_REVISION", entry["type"])
+				assert.Equal(t, "my-svc-00106-xyz", entry["revision"])
+				assert.Equal(t, float64(100), entry["percent"])
+
+				w.WriteHeader(http.StatusOK)
+				json.NewEncoder(w).Encode(map[string]interface{}{"done": true})
 			}
-			// PATCH with updated env
-			assert.Equal(t, http.MethodPatch, r.Method)
-			assert.Contains(t, r.URL.RawQuery, "updateMask=template.revision,template.containers")
-
-			var body map[string]interface{}
-			json.NewDecoder(r.Body).Decode(&body)
-			tmpl := body["template"].(map[string]interface{})
-			_, hasRevision := tmpl["revision"]
-			assert.False(t, hasRevision, "revision should be stripped to avoid 409 conflict")
-			containers := tmpl["containers"].([]interface{})
-			container := containers[0].(map[string]interface{})
-			envs := container["env"].([]interface{})
-			assert.Len(t, envs, 1)
-			env := envs[0].(map[string]interface{})
-			assert.Equal(t, "ALLOWED_ORGS", env["name"])
-			assert.Equal(t, "org1", env["value"])
-
-			w.WriteHeader(http.StatusOK)
-			json.NewEncoder(w).Encode(map[string]interface{}{"done": true})
 		}))
 		defer srv.Close()
 
-		err := newTestClient(srv).UpdateServiceEnvVars(context.Background(), "proj", "us-central1", "my-svc", map[string]string{
-			"ALLOWED_ORGS": "org1",
+		rev, err := newTestClient(srv).UpdateServiceEnvVars(context.Background(), "proj", "us-central1", "my-svc", map[string]string{
+			"ALLOWED_ORGS": "org1,org2",
 		})
 		require.NoError(t, err)
-		assert.Equal(t, 2, callCount)
+		assert.Equal(t, "my-svc-00106-xyz", rev)
+		assert.Equal(t, 4, callCount)
 	})
 
 	t.Run("success_with_polling", func(t *testing.T) {
+		// Template PATCH returns a pending LRO that must be polled.
 		callCount := 0
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			callCount++
-			if callCount == 1 {
+			switch callCount {
+			case 1:
 				// GET service
 				w.WriteHeader(http.StatusOK)
 				json.NewEncoder(w).Encode(map[string]interface{}{
@@ -867,28 +991,35 @@ func TestLiveGCFClient_UpdateServiceEnvVars(t *testing.T) {
 						},
 					},
 				})
-				return
-			}
-			if callCount == 2 {
-				// PATCH returns pending operation
+			case 2:
+				// PATCH template returns pending operation
 				w.WriteHeader(http.StatusOK)
 				json.NewEncoder(w).Encode(map[string]interface{}{
 					"name": "projects/proj/locations/us-central1/operations/op-123",
 					"done": false,
 				})
-				return
+			case 3:
+				// Poll template LRO → done
+				w.WriteHeader(http.StatusOK)
+				json.NewEncoder(w).Encode(map[string]interface{}{"done": true})
+			case 4:
+				// GET to discover new revision
+				w.WriteHeader(http.StatusOK)
+				json.NewEncoder(w).Encode(serviceAfterUpdate("my-svc-00044-ghi"))
+			case 5:
+				// PATCH traffic → done immediately
+				w.WriteHeader(http.StatusOK)
+				json.NewEncoder(w).Encode(map[string]interface{}{"done": true})
 			}
-			// Poll returns done
-			w.WriteHeader(http.StatusOK)
-			json.NewEncoder(w).Encode(map[string]interface{}{"done": true})
 		}))
 		defer srv.Close()
 
-		err := newTestClient(srv).UpdateServiceEnvVars(context.Background(), "proj", "us-central1", "my-svc", map[string]string{
+		rev, err := newTestClient(srv).UpdateServiceEnvVars(context.Background(), "proj", "us-central1", "my-svc", map[string]string{
 			"KEY": "val",
 		})
 		require.NoError(t, err)
-		assert.Equal(t, 3, callCount)
+		assert.Equal(t, "my-svc-00044-ghi", rev)
+		assert.Equal(t, 5, callCount)
 	})
 
 	t.Run("get_failure", func(t *testing.T) {
@@ -898,7 +1029,7 @@ func TestLiveGCFClient_UpdateServiceEnvVars(t *testing.T) {
 		}))
 		defer srv.Close()
 
-		err := newTestClient(srv).UpdateServiceEnvVars(context.Background(), "proj", "us-central1", "my-svc", map[string]string{})
+		_, err := newTestClient(srv).UpdateServiceEnvVars(context.Background(), "proj", "us-central1", "my-svc", map[string]string{})
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "unexpected status 404")
 	})
@@ -923,7 +1054,7 @@ func TestLiveGCFClient_UpdateServiceEnvVars(t *testing.T) {
 		}))
 		defer srv.Close()
 
-		err := newTestClient(srv).UpdateServiceEnvVars(context.Background(), "proj", "us-central1", "my-svc", map[string]string{})
+		_, err := newTestClient(srv).UpdateServiceEnvVars(context.Background(), "proj", "us-central1", "my-svc", map[string]string{})
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "unexpected status 403")
 	})
@@ -939,7 +1070,7 @@ func TestLiveGCFClient_UpdateServiceEnvVars(t *testing.T) {
 		}))
 		defer srv.Close()
 
-		err := newTestClient(srv).UpdateServiceEnvVars(context.Background(), "proj", "us-central1", "my-svc", map[string]string{})
+		_, err := newTestClient(srv).UpdateServiceEnvVars(context.Background(), "proj", "us-central1", "my-svc", map[string]string{})
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "has no containers")
 	})
@@ -968,7 +1099,7 @@ func TestLiveGCFClient_UpdateServiceEnvVars(t *testing.T) {
 		}))
 		defer srv.Close()
 
-		err := newTestClient(srv).UpdateServiceEnvVars(context.Background(), "proj", "us-central1", "my-svc", map[string]string{
+		_, err := newTestClient(srv).UpdateServiceEnvVars(context.Background(), "proj", "us-central1", "my-svc", map[string]string{
 			"KEY": "val",
 		})
 		require.Error(t, err)
@@ -996,7 +1127,7 @@ func TestLiveGCFClient_UpdateServiceEnvVars(t *testing.T) {
 		}))
 		defer srv.Close()
 
-		err := newTestClient(srv).UpdateServiceEnvVars(context.Background(), "proj", "us-central1", "my-svc", map[string]string{
+		_, err := newTestClient(srv).UpdateServiceEnvVars(context.Background(), "proj", "us-central1", "my-svc", map[string]string{
 			"KEY": "val",
 		})
 		require.Error(t, err)
@@ -1010,7 +1141,7 @@ func TestLiveGCFClient_UpdateServiceEnvVars(t *testing.T) {
 		}))
 		defer srv.Close()
 
-		err := newTestClient(srv).UpdateServiceEnvVars(context.Background(), "proj", "us-central1", "my-svc", map[string]string{})
+		_, err := newTestClient(srv).UpdateServiceEnvVars(context.Background(), "proj", "us-central1", "my-svc", map[string]string{})
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "has no template")
 	})
@@ -1026,7 +1157,7 @@ func TestLiveGCFClient_UpdateServiceEnvVars(t *testing.T) {
 		}))
 		defer srv.Close()
 
-		err := newTestClient(srv).UpdateServiceEnvVars(context.Background(), "proj", "us-central1", "my-svc", map[string]string{})
+		_, err := newTestClient(srv).UpdateServiceEnvVars(context.Background(), "proj", "us-central1", "my-svc", map[string]string{})
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "container is not an object")
 	})
@@ -1038,7 +1169,7 @@ func TestLiveGCFClient_UpdateServiceEnvVars(t *testing.T) {
 		}))
 		defer srv.Close()
 
-		err := newTestClient(srv).UpdateServiceEnvVars(context.Background(), "proj", "us-central1", "my-svc", map[string]string{})
+		_, err := newTestClient(srv).UpdateServiceEnvVars(context.Background(), "proj", "us-central1", "my-svc", map[string]string{})
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "decoding Cloud Run service")
 	})
@@ -1074,7 +1205,7 @@ func TestLiveGCFClient_UpdateServiceEnvVars(t *testing.T) {
 		}))
 		defer srv.Close()
 
-		err := newTestClient(srv).UpdateServiceEnvVars(context.Background(), "proj", "us-central1", "my-svc", map[string]string{
+		_, err := newTestClient(srv).UpdateServiceEnvVars(context.Background(), "proj", "us-central1", "my-svc", map[string]string{
 			"KEY": "val",
 		})
 		require.Error(t, err)
@@ -1104,7 +1235,7 @@ func TestLiveGCFClient_UpdateServiceEnvVars(t *testing.T) {
 		}))
 		defer srv.Close()
 
-		err := newTestClient(srv).UpdateServiceEnvVars(context.Background(), "proj", "us-central1", "my-svc", map[string]string{
+		_, err := newTestClient(srv).UpdateServiceEnvVars(context.Background(), "proj", "us-central1", "my-svc", map[string]string{
 			"KEY": "val",
 		})
 		require.Error(t, err)
@@ -1115,7 +1246,8 @@ func TestLiveGCFClient_UpdateServiceEnvVars(t *testing.T) {
 		callCount := 0
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			callCount++
-			if callCount == 1 {
+			switch callCount {
+			case 1:
 				w.WriteHeader(http.StatusOK)
 				json.NewEncoder(w).Encode(map[string]interface{}{
 					"template": map[string]interface{}{
@@ -1124,25 +1256,32 @@ func TestLiveGCFClient_UpdateServiceEnvVars(t *testing.T) {
 						},
 					},
 				})
-				return
-			}
-			var body map[string]interface{}
-			json.NewDecoder(r.Body).Decode(&body)
-			tmpl := body["template"].(map[string]interface{})
-			containers := tmpl["containers"].([]interface{})
-			container := containers[0].(map[string]interface{})
-			envs := container["env"].([]interface{})
-			assert.Len(t, envs, 3)
-			assert.Equal(t, "ALPHA", envs[0].(map[string]interface{})["name"])
-			assert.Equal(t, "BETA", envs[1].(map[string]interface{})["name"])
-			assert.Equal(t, "GAMMA", envs[2].(map[string]interface{})["name"])
+			case 2:
+				// Verify sorted env vars in template PATCH
+				var body map[string]interface{}
+				json.NewDecoder(r.Body).Decode(&body)
+				tmpl := body["template"].(map[string]interface{})
+				containers := tmpl["containers"].([]interface{})
+				container := containers[0].(map[string]interface{})
+				envs := container["env"].([]interface{})
+				assert.Len(t, envs, 3)
+				assert.Equal(t, "ALPHA", envs[0].(map[string]interface{})["name"])
+				assert.Equal(t, "BETA", envs[1].(map[string]interface{})["name"])
+				assert.Equal(t, "GAMMA", envs[2].(map[string]interface{})["name"])
 
-			w.WriteHeader(http.StatusOK)
-			json.NewEncoder(w).Encode(map[string]interface{}{"done": true})
+				w.WriteHeader(http.StatusOK)
+				json.NewEncoder(w).Encode(map[string]interface{}{"done": true})
+			case 3:
+				w.WriteHeader(http.StatusOK)
+				json.NewEncoder(w).Encode(serviceAfterUpdate("my-svc-00045-jkl"))
+			case 4:
+				w.WriteHeader(http.StatusOK)
+				json.NewEncoder(w).Encode(map[string]interface{}{"done": true})
+			}
 		}))
 		defer srv.Close()
 
-		err := newTestClient(srv).UpdateServiceEnvVars(context.Background(), "proj", "us-central1", "my-svc", map[string]string{
+		_, err := newTestClient(srv).UpdateServiceEnvVars(context.Background(), "proj", "us-central1", "my-svc", map[string]string{
 			"GAMMA": "3",
 			"ALPHA": "1",
 			"BETA":  "2",
@@ -1150,11 +1289,13 @@ func TestLiveGCFClient_UpdateServiceEnvVars(t *testing.T) {
 		require.NoError(t, err)
 	})
 
-	t.Run("context_canceled_during_polling", func(t *testing.T) {
+	t.Run("no_latest_created_revision", func(t *testing.T) {
+		// After template PATCH succeeds, the GET returns no latestCreatedRevision.
 		callCount := 0
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			callCount++
-			if callCount == 1 {
+			switch callCount {
+			case 1:
 				w.WriteHeader(http.StatusOK)
 				json.NewEncoder(w).Encode(map[string]interface{}{
 					"template": map[string]interface{}{
@@ -1163,29 +1304,264 @@ func TestLiveGCFClient_UpdateServiceEnvVars(t *testing.T) {
 						},
 					},
 				})
-				return
-			}
-			if callCount == 2 {
+			case 2:
+				w.WriteHeader(http.StatusOK)
+				json.NewEncoder(w).Encode(map[string]interface{}{"done": true})
+			case 3:
+				// GET returns service without latestCreatedRevision
 				w.WriteHeader(http.StatusOK)
 				json.NewEncoder(w).Encode(map[string]interface{}{
-					"name": "projects/proj/locations/us-central1/operations/op-789",
+					"template": map[string]interface{}{
+						"containers": []interface{}{
+							map[string]interface{}{"image": "img", "env": []interface{}{}},
+						},
+					},
+				})
+			}
+		}))
+		defer srv.Close()
+
+		_, err := newTestClient(srv).UpdateServiceEnvVars(context.Background(), "proj", "us-central1", "my-svc", map[string]string{
+			"KEY": "val",
+		})
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "no latestCreatedRevision")
+	})
+
+	t.Run("get_after_template_update_failure", func(t *testing.T) {
+		// Template PATCH succeeds but the follow-up GET to discover the
+		// new revision returns an error (e.g., transient 500).
+		callCount := 0
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			callCount++
+			switch callCount {
+			case 1:
+				// GET service
+				w.WriteHeader(http.StatusOK)
+				json.NewEncoder(w).Encode(map[string]interface{}{
+					"template": map[string]interface{}{
+						"containers": []interface{}{
+							map[string]interface{}{"image": "img", "env": []interface{}{}},
+						},
+					},
+				})
+			case 2:
+				// PATCH template → done
+				w.WriteHeader(http.StatusOK)
+				json.NewEncoder(w).Encode(map[string]interface{}{"done": true})
+			case 3:
+				// GET to discover revision → 500 Internal Server Error
+				w.WriteHeader(http.StatusInternalServerError)
+				fmt.Fprintln(w, `{"error":{"message":"internal error"}}`)
+			}
+		}))
+		defer srv.Close()
+
+		rev, err := newTestClient(srv).UpdateServiceEnvVars(context.Background(), "proj", "us-central1", "my-svc", map[string]string{
+			"KEY": "val",
+		})
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "unexpected status 500 getting Cloud Run service after update")
+		assert.Equal(t, "", rev, "revision should be empty when discovery GET fails")
+		assert.Equal(t, 3, callCount, "should stop after failed discovery GET")
+	})
+
+	t.Run("success_with_traffic_polling", func(t *testing.T) {
+		// Traffic PATCH returns a pending LRO that must be polled.
+		callCount := 0
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			callCount++
+			switch callCount {
+			case 1:
+				// GET service
+				w.WriteHeader(http.StatusOK)
+				json.NewEncoder(w).Encode(map[string]interface{}{
+					"template": map[string]interface{}{
+						"containers": []interface{}{
+							map[string]interface{}{"image": "img", "env": []interface{}{}},
+						},
+					},
+				})
+			case 2:
+				// PATCH template → done immediately
+				w.WriteHeader(http.StatusOK)
+				json.NewEncoder(w).Encode(map[string]interface{}{"done": true})
+			case 3:
+				// GET to discover new revision
+				w.WriteHeader(http.StatusOK)
+				json.NewEncoder(w).Encode(serviceAfterUpdate("my-svc-00047-pqr"))
+			case 4:
+				// PATCH traffic → pending LRO
+				assert.Equal(t, http.MethodPatch, r.Method)
+				assert.Contains(t, r.URL.RawQuery, "updateMask=traffic")
+				w.WriteHeader(http.StatusOK)
+				json.NewEncoder(w).Encode(map[string]interface{}{
+					"name": "projects/proj/locations/us-central1/operations/op-traffic-456",
 					"done": false,
 				})
-				return
+			case 5:
+				// Poll traffic LRO → done
+				assert.Contains(t, r.URL.Path, "operations/op-traffic-456")
+				w.WriteHeader(http.StatusOK)
+				json.NewEncoder(w).Encode(map[string]interface{}{"done": true})
 			}
+		}))
+		defer srv.Close()
+
+		rev, err := newTestClient(srv).UpdateServiceEnvVars(context.Background(), "proj", "us-central1", "my-svc", map[string]string{
+			"KEY": "val",
+		})
+		require.NoError(t, err)
+		assert.Equal(t, "my-svc-00047-pqr", rev)
+		assert.Equal(t, 5, callCount, "should include traffic LRO poll")
+	})
+
+	t.Run("traffic_patch_failure_returns_revision", func(t *testing.T) {
+		// If the traffic PATCH fails, the revision name is still returned.
+		callCount := 0
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			callCount++
+			switch callCount {
+			case 1:
+				w.WriteHeader(http.StatusOK)
+				json.NewEncoder(w).Encode(map[string]interface{}{
+					"template": map[string]interface{}{
+						"containers": []interface{}{
+							map[string]interface{}{"image": "img", "env": []interface{}{}},
+						},
+					},
+				})
+			case 2:
+				w.WriteHeader(http.StatusOK)
+				json.NewEncoder(w).Encode(map[string]interface{}{"done": true})
+			case 3:
+				w.WriteHeader(http.StatusOK)
+				json.NewEncoder(w).Encode(serviceAfterUpdate("my-svc-00046-mno"))
+			case 4:
+				// Traffic PATCH fails
+				w.WriteHeader(http.StatusForbidden)
+				fmt.Fprintln(w, `{"error":{"message":"permission denied"}}`)
+			}
+		}))
+		defer srv.Close()
+
+		rev, err := newTestClient(srv).UpdateServiceEnvVars(context.Background(), "proj", "us-central1", "my-svc", map[string]string{
+			"KEY": "val",
+		})
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "unexpected status 403")
+		assert.Equal(t, "my-svc-00046-mno", rev, "revision should be returned even on traffic PATCH failure")
+	})
+
+	t.Run("traffic_lro_operation_error", func(t *testing.T) {
+		// Traffic PATCH returns 200 with a pending LRO, but the LRO
+		// completes with an error. The revision name should still be
+		// returned since the template PATCH succeeded.
+		callCount := 0
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			callCount++
+			switch callCount {
+			case 1:
+				// GET service
+				w.WriteHeader(http.StatusOK)
+				json.NewEncoder(w).Encode(map[string]interface{}{
+					"template": map[string]interface{}{
+						"containers": []interface{}{
+							map[string]interface{}{"image": "img", "env": []interface{}{}},
+						},
+					},
+				})
+			case 2:
+				// PATCH template → done
+				w.WriteHeader(http.StatusOK)
+				json.NewEncoder(w).Encode(map[string]interface{}{"done": true})
+			case 3:
+				// GET to discover revision
+				w.WriteHeader(http.StatusOK)
+				json.NewEncoder(w).Encode(serviceAfterUpdate("my-svc-00048-stu"))
+			case 4:
+				// PATCH traffic → pending LRO
+				w.WriteHeader(http.StatusOK)
+				json.NewEncoder(w).Encode(map[string]interface{}{
+					"name": "projects/proj/locations/us-central1/operations/op-traffic-err",
+					"done": false,
+				})
+			case 5:
+				// Poll traffic LRO → done with error
+				w.WriteHeader(http.StatusOK)
+				json.NewEncoder(w).Encode(map[string]interface{}{
+					"done":  true,
+					"error": map[string]interface{}{"message": "traffic routing quota exceeded"},
+				})
+			}
+		}))
+		defer srv.Close()
+
+		rev, err := newTestClient(srv).UpdateServiceEnvVars(context.Background(), "proj", "us-central1", "my-svc", map[string]string{
+			"KEY": "val",
+		})
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "traffic routing quota exceeded")
+		assert.Equal(t, "my-svc-00048-stu", rev, "revision should be returned even when traffic LRO fails")
+		assert.Equal(t, 5, callCount)
+	})
+
+	t.Run("context_canceled_before_request", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			w.WriteHeader(http.StatusOK)
-			json.NewEncoder(w).Encode(map[string]interface{}{"done": false})
+			json.NewEncoder(w).Encode(map[string]interface{}{})
 		}))
 		defer srv.Close()
 
 		ctx, cancel := context.WithCancel(context.Background())
 		cancel()
 
-		err := newTestClient(srv).UpdateServiceEnvVars(ctx, "proj", "us-central1", "my-svc", map[string]string{
+		_, err := newTestClient(srv).UpdateServiceEnvVars(ctx, "proj", "us-central1", "my-svc", map[string]string{
 			"KEY": "val",
 		})
 		require.Error(t, err)
 		assert.ErrorIs(t, err, context.Canceled)
+	})
+
+	t.Run("context_canceled_during_polling", func(t *testing.T) {
+		callCount := 0
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			callCount++
+			switch callCount {
+			case 1:
+				// GET service
+				w.WriteHeader(http.StatusOK)
+				json.NewEncoder(w).Encode(map[string]interface{}{
+					"template": map[string]interface{}{
+						"containers": []interface{}{
+							map[string]interface{}{"image": "img", "env": []interface{}{}},
+						},
+					},
+				})
+			case 2:
+				// PATCH template → pending LRO
+				w.WriteHeader(http.StatusOK)
+				json.NewEncoder(w).Encode(map[string]interface{}{
+					"name": "projects/proj/locations/us-central1/operations/op-789",
+					"done": false,
+				})
+			default:
+				// Poll — cancel the context so the next poll fails
+				cancel()
+				w.WriteHeader(http.StatusOK)
+				json.NewEncoder(w).Encode(map[string]interface{}{"done": false})
+			}
+		}))
+		defer srv.Close()
+
+		_, err := newTestClient(srv).UpdateServiceEnvVars(ctx, "proj", "us-central1", "my-svc", map[string]string{
+			"KEY": "val",
+		})
+		require.Error(t, err)
+		assert.ErrorIs(t, err, context.Canceled)
+		assert.GreaterOrEqual(t, callCount, 3, "should reach polling before cancellation")
 	})
 }
 

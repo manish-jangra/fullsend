@@ -101,9 +101,13 @@ type GCFClient interface {
 	// UpdateServiceEnvVars updates environment variables on the underlying
 	// Cloud Run service directly, bypassing the Cloud Functions API. This
 	// avoids triggering a source rebuild — only a new revision is created
-	// reusing the existing container image. Polls the Cloud Run LRO
-	// internally and returns after the update is complete.
-	UpdateServiceEnvVars(ctx context.Context, projectID, region, serviceName string, envVars map[string]string) error
+	// reusing the existing container image. Uses a multi-step approach:
+	// GETs the current service, PATCHes the template to create a new
+	// revision, GETs the service again to discover the revision name,
+	// then PATCHes traffic to pin 100% to that revision (REVISION-pinned,
+	// matching Cloud Functions deploy behavior). Returns the new revision
+	// name.
+	UpdateServiceEnvVars(ctx context.Context, projectID, region, serviceName string, envVars map[string]string) (string, error)
 	WaitForOperation(ctx context.Context, operationName string) error
 
 	// Project number lookup
@@ -1148,26 +1152,38 @@ func (c *LiveGCFClient) UpdateFunctionEnvVars(ctx context.Context, projectID, re
 // Cloud Run service directly via the Cloud Run Admin API v2, bypassing the
 // Cloud Functions API entirely. This avoids triggering a source rebuild —
 // only a new Cloud Run revision is created reusing the existing container
-// image. The method polls the Cloud Run LRO until the update completes.
-func (c *LiveGCFClient) UpdateServiceEnvVars(ctx context.Context, projectID, region, serviceName string, envVars map[string]string) error {
+// image.
+//
+// Uses a multi-step approach to match Cloud Functions deploy behavior:
+//  1. GET current service to preserve container config
+//  2. PATCH template to create a new revision with updated env vars
+//  3. GET service to discover the new revision name
+//  4. PATCH traffic to pin 100% to the new revision (REVISION-pinned)
+//
+// This ensures explicit revision-pinned traffic routing. If the traffic
+// PATCH fails, the old revision continues serving — no traffic is lost.
+// Returns the new revision name for CLI reporting and rollback reference.
+//
+// See https://github.com/fullsend-ai/fullsend/issues/1844.
+func (c *LiveGCFClient) UpdateServiceEnvVars(ctx context.Context, projectID, region, serviceName string, envVars map[string]string) (string, error) {
 	serviceURL := fmt.Sprintf("https://run.googleapis.com/v2/projects/%s/locations/%s/services/%s",
 		url.PathEscape(projectID), url.PathEscape(region), url.PathEscape(serviceName))
 
-	// GET current service to preserve container config (image, ports, etc.).
+	// Step 1: GET current service to preserve container config (image, ports, etc.).
 	getResp, err := c.Client.DoRequest(ctx, http.MethodGet, serviceURL, "")
 	if err != nil {
-		return fmt.Errorf("getting Cloud Run service: %w", err)
+		return "", fmt.Errorf("getting Cloud Run service: %w", err)
 	}
 	defer getResp.Body.Close()
 
 	if getResp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(io.LimitReader(getResp.Body, 1<<20))
-		return fmt.Errorf("unexpected status %d getting Cloud Run service: %s", getResp.StatusCode, gcp.ExtractErrorMessage(body))
+		return "", fmt.Errorf("unexpected status %d getting Cloud Run service: %s", getResp.StatusCode, gcp.ExtractErrorMessage(body))
 	}
 
 	var service map[string]interface{}
 	if err := json.NewDecoder(io.LimitReader(getResp.Body, 10<<20)).Decode(&service); err != nil {
-		return fmt.Errorf("decoding Cloud Run service: %w", err)
+		return "", fmt.Errorf("decoding Cloud Run service: %w", err)
 	}
 
 	// Build the env var array in Cloud Run format: [{name, value}, ...].
@@ -1185,39 +1201,106 @@ func (c *LiveGCFClient) UpdateServiceEnvVars(ctx context.Context, projectID, reg
 	// Navigate to template.containers[0] and replace its env field.
 	template, _ := service["template"].(map[string]interface{})
 	if template == nil {
-		return fmt.Errorf("Cloud Run service has no template")
+		return "", fmt.Errorf("Cloud Run service has no template")
 	}
 	// Remove revision name so Cloud Run auto-generates one; re-sending the
 	// existing name causes a 409 "revision already exists" conflict.
 	delete(template, "revision")
 	containers, _ := template["containers"].([]interface{})
 	if len(containers) == 0 {
-		return fmt.Errorf("Cloud Run service has no containers")
+		return "", fmt.Errorf("Cloud Run service has no containers")
 	}
 	container, _ := containers[0].(map[string]interface{})
 	if container == nil {
-		return fmt.Errorf("Cloud Run service container is not an object")
+		return "", fmt.Errorf("Cloud Run service container is not an object")
 	}
 	container["env"] = envArray
 
+	// Remove traffic from the payload — we handle it in a separate PATCH
+	// below to ensure explicit revision-pinned routing.
+	delete(service, "traffic")
+
 	payloadBytes, err := json.Marshal(service)
 	if err != nil {
-		return fmt.Errorf("marshaling Cloud Run service update: %w", err)
+		return "", fmt.Errorf("marshaling Cloud Run service update: %w", err)
 	}
 
-	// PATCH the service with updateMask covering both template.revision (cleared
-	// so Cloud Run auto-generates a new name) and template.containers (env vars).
+	// Step 2: PATCH the template to create a new revision.
+	// updateMask covers template.revision (cleared so Cloud Run
+	// auto-generates a new name) and template.containers (env vars).
 	patchResp, err := c.Client.DoRequest(ctx, http.MethodPatch, serviceURL+"?updateMask=template.revision,template.containers", string(payloadBytes))
 	if err != nil {
-		return fmt.Errorf("patching Cloud Run service: %w", err)
+		return "", fmt.Errorf("patching Cloud Run service template: %w", err)
 	}
 	defer patchResp.Body.Close()
 
 	if patchResp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(io.LimitReader(patchResp.Body, 1<<20))
-		return fmt.Errorf("unexpected status %d patching Cloud Run service: %s", patchResp.StatusCode, gcp.ExtractErrorMessage(body))
+		return "", fmt.Errorf("unexpected status %d patching Cloud Run service: %s", patchResp.StatusCode, gcp.ExtractErrorMessage(body))
 	}
 
+	if err := c.handleCloudRunLRO(ctx, patchResp); err != nil {
+		return "", fmt.Errorf("waiting for template update: %w", err)
+	}
+
+	// Step 3: GET service again to discover the new revision name.
+	getResp2, err := c.Client.DoRequest(ctx, http.MethodGet, serviceURL, "")
+	if err != nil {
+		return "", fmt.Errorf("getting Cloud Run service after template update: %w", err)
+	}
+	defer getResp2.Body.Close()
+
+	if getResp2.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(io.LimitReader(getResp2.Body, 1<<20))
+		return "", fmt.Errorf("unexpected status %d getting Cloud Run service after update: %s", getResp2.StatusCode, gcp.ExtractErrorMessage(body))
+	}
+
+	var updatedService struct {
+		LatestCreatedRevision string `json:"latestCreatedRevision"`
+	}
+	if err := json.NewDecoder(io.LimitReader(getResp2.Body, 10<<20)).Decode(&updatedService); err != nil {
+		return "", fmt.Errorf("decoding Cloud Run service after update: %w", err)
+	}
+	newRevision := updatedService.LatestCreatedRevision
+	if newRevision == "" {
+		return "", fmt.Errorf("Cloud Run service has no latestCreatedRevision after template update")
+	}
+
+	// Step 4: PATCH traffic to pin 100% to the new revision.
+	trafficPayload, err := json.Marshal(map[string]interface{}{
+		"traffic": []map[string]interface{}{
+			{
+				"type":     "TRAFFIC_TARGET_ALLOCATION_TYPE_REVISION",
+				"revision": newRevision,
+				"percent":  100,
+			},
+		},
+	})
+	if err != nil {
+		return "", fmt.Errorf("marshaling traffic update: %w", err)
+	}
+
+	trafficResp, err := c.Client.DoRequest(ctx, http.MethodPatch, serviceURL+"?updateMask=traffic", string(trafficPayload))
+	if err != nil {
+		return newRevision, fmt.Errorf("patching Cloud Run traffic: %w", err)
+	}
+	defer trafficResp.Body.Close()
+
+	if trafficResp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(io.LimitReader(trafficResp.Body, 1<<20))
+		return newRevision, fmt.Errorf("unexpected status %d patching Cloud Run traffic: %s", trafficResp.StatusCode, gcp.ExtractErrorMessage(body))
+	}
+
+	if err := c.handleCloudRunLRO(ctx, trafficResp); err != nil {
+		return newRevision, fmt.Errorf("waiting for traffic update: %w", err)
+	}
+
+	return newRevision, nil
+}
+
+// handleCloudRunLRO reads the LRO response from a Cloud Run PATCH and
+// waits for it to complete if not already done.
+func (c *LiveGCFClient) handleCloudRunLRO(ctx context.Context, resp *http.Response) error {
 	var op struct {
 		Name  string `json:"name"`
 		Done  bool   `json:"done"`
@@ -1225,7 +1308,7 @@ func (c *LiveGCFClient) UpdateServiceEnvVars(ctx context.Context, projectID, reg
 			Message string `json:"message"`
 		} `json:"error"`
 	}
-	if err := json.NewDecoder(io.LimitReader(patchResp.Body, 1<<20)).Decode(&op); err != nil {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&op); err != nil {
 		return fmt.Errorf("decoding Cloud Run patch response: %w", err)
 	}
 

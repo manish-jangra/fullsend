@@ -413,7 +413,11 @@ func (p *Provisioner) EnsureOrgInMint(ctx context.Context, expectedURL string, o
 		updated["ALLOWED_WORKFLOW_FILES"] = "*"
 	}
 
-	if err := p.gcpAPI.UpdateServiceEnvVars(ctx, p.cfg.ProjectID, p.cfg.Region, functionName, updated); err != nil {
+	rev, err := p.gcpAPI.UpdateServiceEnvVars(ctx, p.cfg.ProjectID, p.cfg.Region, functionName, updated)
+	if err != nil {
+		if rev != "" {
+			return fmt.Errorf("updating mint env vars (revision %s created but traffic routing may have failed): %w", rev, err)
+		}
 		return fmt.Errorf("updating mint env vars: %w", err)
 	}
 
@@ -463,7 +467,11 @@ func (p *Provisioner) RegisterPerRepoWIF(ctx context.Context, repo string) error
 		updated["PER_REPO_WIF_REPOS"] = existing + "," + repo
 	}
 
-	if err := p.gcpAPI.UpdateServiceEnvVars(ctx, p.cfg.ProjectID, p.cfg.Region, functionName, updated); err != nil {
+	rev, err := p.gcpAPI.UpdateServiceEnvVars(ctx, p.cfg.ProjectID, p.cfg.Region, functionName, updated)
+	if err != nil {
+		if rev != "" {
+			return fmt.Errorf("updating PER_REPO_WIF_REPOS (revision %s created but traffic routing may have failed): %w", rev, err)
+		}
 		return fmt.Errorf("updating PER_REPO_WIF_REPOS: %w", err)
 	}
 	return nil
@@ -1532,7 +1540,11 @@ func (p *Provisioner) RemoveOrgFromMint(ctx context.Context, org string) error {
 	// Re-derive ALLOWED_ROLES.
 	updated["ALLOWED_ROLES"] = deriveAllowedRoles(updated["ROLE_APP_IDS"])
 
-	if err := p.gcpAPI.UpdateServiceEnvVars(ctx, p.cfg.ProjectID, p.cfg.Region, functionName, updated); err != nil {
+	rev, err := p.gcpAPI.UpdateServiceEnvVars(ctx, p.cfg.ProjectID, p.cfg.Region, functionName, updated)
+	if err != nil {
+		if rev != "" {
+			return fmt.Errorf("removing org from mint env vars (revision %s created but traffic routing may have failed): %w", rev, err)
+		}
 		return fmt.Errorf("removing org from mint env vars: %w", err)
 	}
 	return nil
@@ -1566,7 +1578,11 @@ func (p *Provisioner) RemoveRepoFromMint(ctx context.Context, repo string) error
 	}
 	updated["PER_REPO_WIF_REPOS"] = strings.Join(filtered, ",")
 
-	if err := p.gcpAPI.UpdateServiceEnvVars(ctx, p.cfg.ProjectID, p.cfg.Region, functionName, updated); err != nil {
+	rev, err := p.gcpAPI.UpdateServiceEnvVars(ctx, p.cfg.ProjectID, p.cfg.Region, functionName, updated)
+	if err != nil {
+		if rev != "" {
+			return fmt.Errorf("removing repo from mint env vars (revision %s created but traffic routing may have failed): %w", rev, err)
+		}
 		return fmt.Errorf("removing repo from mint env vars: %w", err)
 	}
 	return nil
