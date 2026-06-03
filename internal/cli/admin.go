@@ -494,6 +494,16 @@ Inference authentication:
 			}
 			printer.Blank()
 
+			// Ensure the mint service account exists before storing PEM
+			// secrets — StoreAgentPEM grants the SA access to each secret,
+			// which fails if the SA hasn't been created yet.
+			if mintProject != "" && !skipAppSetup && !skipMintCheck {
+				prov := gcf.NewProvisioner(gcf.Config{ProjectID: mintProject}, gcf.NewLiveGCFClient(mintProject))
+				if err := prov.EnsureMintServiceAccount(ctx); err != nil {
+					return fmt.Errorf("ensuring mint service account: %w", err)
+				}
+			}
+
 			// Pre-copy PEM secrets for shared public apps before app setup.
 			var sharedSlugs map[string]string
 			var perOrgStoredIDs map[string]string

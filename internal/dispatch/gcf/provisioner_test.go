@@ -432,6 +432,23 @@ func TestStoreAgentPEM_GetSecretNonNotFoundError(t *testing.T) {
 	assert.Contains(t, err.Error(), "permission denied")
 }
 
+func TestEnsureMintServiceAccount(t *testing.T) {
+	fake := newFakeGCFClient()
+	p := newTestProvisioner(Config{ProjectID: "my-project"}, fake)
+
+	err := p.EnsureMintServiceAccount(context.Background())
+	require.NoError(t, err)
+
+	assert.Equal(t, []string{"CreateServiceAccount"}, fake.calls)
+}
+
+func TestEnsureMintServiceAccount_MissingProjectID(t *testing.T) {
+	p := newTestProvisioner(Config{}, newFakeGCFClient())
+	err := p.EnsureMintServiceAccount(context.Background())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "project ID is required")
+}
+
 // --- self-managed provision tests ---
 
 func TestProvisioner_Provision_FullFlow(t *testing.T) {

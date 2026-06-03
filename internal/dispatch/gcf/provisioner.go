@@ -179,6 +179,16 @@ func (p *Provisioner) SecretExists(ctx context.Context, org, role string) (bool,
 	return false, fmt.Errorf("checking secret %s: %w", sid, err)
 }
 
+// EnsureMintServiceAccount creates the mint service account if it does not
+// already exist. Call this before StoreAgentPEM so the IAM binding on
+// secrets can reference the service account.
+func (p *Provisioner) EnsureMintServiceAccount(ctx context.Context) error {
+	if p.cfg.ProjectID == "" {
+		return fmt.Errorf("project ID is required")
+	}
+	return p.gcpAPI.CreateServiceAccount(ctx, p.cfg.ProjectID, saName, "Fullsend token mint Cloud Function")
+}
+
 // StoreAgentPEM persists a single org/role's PEM in Secret Manager.
 // Called during App setup so each PEM is stored immediately after creation.
 func (p *Provisioner) StoreAgentPEM(ctx context.Context, org, role string, pemData []byte) error {
