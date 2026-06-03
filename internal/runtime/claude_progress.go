@@ -203,7 +203,7 @@ func emitToolProgress(printer *ui.Printer, toolName, context string, start time.
 		msg = fmt.Sprintf("%s (%s, %d tools)", toolName, elapsed, toolCount)
 	}
 
-	msg = SanitizeOutput(msg)
+	msg = sanitizeOutput(msg)
 	if isCI {
 		fmt.Fprintf(os.Stderr, "::notice::%s\n", msg)
 	}

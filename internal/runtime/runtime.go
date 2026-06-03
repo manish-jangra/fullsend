@@ -35,6 +35,7 @@ type TranscriptError struct {
 type Runtime interface {
 	Name() string
 	ConfigDir() string
+	WorkspaceDir() string
 	EnvExports() []string
 	Bootstrap(input BootstrapInput) error
 	Run(params RunParams, printer *ui.Printer, start time.Time, metrics *RunMetrics) (exitCode int, err error)

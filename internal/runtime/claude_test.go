@@ -14,10 +14,27 @@ import (
 	"github.com/fullsend-ai/fullsend/internal/sandbox"
 )
 
+type bootstrapInput struct {
+	sandboxName string
+	agentPath   string
+}
+
+func (b bootstrapInput) SandboxName() string  { return b.sandboxName }
+func (b bootstrapInput) AgentPath() string    { return b.agentPath }
+func (b bootstrapInput) SkillDirs() []string  { return nil }
+func (b bootstrapInput) PluginDirs() []string { return nil }
+
+func TestBootstrap_EmptyAgentPath(t *testing.T) {
+	err := ClaudeRuntime{}.Bootstrap(bootstrapInput{sandboxName: "test"})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "agent path is required")
+}
+
 func TestDefaultRuntime(t *testing.T) {
 	backend := Default()
 	assert.Equal(t, "claude", backend.Name())
 	assert.Equal(t, sandbox.SandboxClaudeConfig, backend.ConfigDir())
+	assert.Equal(t, sandbox.SandboxWorkspace, backend.WorkspaceDir())
 	assert.Contains(t, backend.EnvExports()[0], "CLAUDE_CONFIG_DIR")
 	assert.NotNil(t, backend.Transcripts)
 }

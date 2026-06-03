@@ -132,10 +132,10 @@ func truncateError(msg string) string {
 func emitTranscriptErrors(w io.Writer, summaries []TranscriptError) {
 	for _, s := range summaries {
 		// Sanitize the error message to prevent GHA command injection.
-		msg := SanitizeOutput(s.ErrorMessage)
+		msg := sanitizeOutput(s.ErrorMessage)
 		if msg == "" {
-			msg = fmt.Sprintf("agent terminated with error (subtype: %s)", SanitizeOutput(s.Subtype))
+			msg = fmt.Sprintf("agent terminated with error (subtype: %s)", sanitizeOutput(s.Subtype))
 		}
-		fmt.Fprintf(w, "::error title=Agent Error (%s)::%s\n", SanitizeOutput(s.Source), msg)
+		fmt.Fprintf(w, "::error title=Agent Error (%s)::%s\n", sanitizeOutput(s.Source), msg)
 	}
 }

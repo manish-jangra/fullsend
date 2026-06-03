@@ -23,11 +23,18 @@ func (ClaudeRuntime) Name() string { return "claude" }
 
 func (ClaudeRuntime) ConfigDir() string { return sandbox.SandboxClaudeConfig }
 
-func (ClaudeRuntime) EnvExports() []string {
-	return []string{fmt.Sprintf("export CLAUDE_CONFIG_DIR=%s", sandbox.SandboxClaudeConfig)}
+func (ClaudeRuntime) WorkspaceDir() string { return sandbox.SandboxWorkspace }
+
+func (r ClaudeRuntime) EnvExports() []string {
+	return []string{fmt.Sprintf("export CLAUDE_CONFIG_DIR=%s", r.ConfigDir())}
 }
 
 func (r ClaudeRuntime) Bootstrap(input BootstrapInput) error {
+	agentPath := input.AgentPath()
+	if agentPath == "" {
+		return fmt.Errorf("agent path is required")
+	}
+
 	sandboxName := input.SandboxName()
 	configDir := r.ConfigDir()
 
@@ -37,12 +44,15 @@ func (r ClaudeRuntime) Bootstrap(input BootstrapInput) error {
 		return fmt.Errorf("creating runtime config dirs: %w", err)
 	}
 
-	if err := sandbox.Upload(sandboxName, input.AgentPath(),
+	if err := sandbox.Upload(sandboxName, agentPath,
 		fmt.Sprintf("%s/agents/", configDir)); err != nil {
 		return fmt.Errorf("copying agent definition: %w", err)
 	}
 
 	for _, skillPath := range input.SkillDirs() {
+		if skillPath == "" {
+			continue
+		}
 		if err := sandbox.Upload(sandboxName, skillPath,
 			fmt.Sprintf("%s/skills/", configDir)); err != nil {
 			return fmt.Errorf("copying skill %q: %w", skillPath, err)
@@ -50,8 +60,14 @@ func (r ClaudeRuntime) Bootstrap(input BootstrapInput) error {
 		fmt.Fprintf(os.Stderr, "Skill %q: uploaded to sandbox\n", filepath.Base(skillPath))
 	}
 
-	if len(input.PluginDirs()) > 0 {
-		if err := bootstrapPlugins(sandboxName, configDir, input.PluginDirs()); err != nil {
+	var pluginDirs []string
+	for _, p := range input.PluginDirs() {
+		if p != "" {
+			pluginDirs = append(pluginDirs, p)
+		}
+	}
+	if len(pluginDirs) > 0 {
+		if err := bootstrapPlugins(sandboxName, configDir, pluginDirs); err != nil {
 			return fmt.Errorf("bootstrapping plugins: %w", err)
 		}
 	}
@@ -72,7 +88,7 @@ func (ClaudeRuntime) Run(params RunParams, printer *ui.Printer, start time.Time,
 	defer cancel()
 
 	if parseErr := progressParser(stdout, printer, start, metrics); parseErr != nil {
-		fmt.Fprintf(os.Stderr, "  progress parser: %v\n", SanitizeOutput(parseErr.Error()))
+		fmt.Fprintf(os.Stderr, "  progress parser: %v\n", sanitizeOutput(parseErr.Error()))
 		cancel()
 		io.Copy(io.Discard, stdout)
 	}
@@ -90,14 +106,13 @@ func (ClaudeRuntime) Run(params RunParams, printer *ui.Printer, start time.Time,
 	return exitCode, nil
 }
 
-func (ClaudeRuntime) ClearIterationArtifacts(sandboxName string) error {
-	clearCmd := fmt.Sprintf("rm -rf %s/output/* %s/*.jsonl",
-		sandbox.SandboxWorkspace, sandbox.SandboxClaudeConfig)
+func (r ClaudeRuntime) ClearIterationArtifacts(sandboxName string) error {
+	clearCmd := fmt.Sprintf("rm -rf %s/output/* %s/*.jsonl", r.WorkspaceDir(), r.ConfigDir())
 	_, _, _, err := sandbox.Exec(sandboxName, clearCmd, 10*time.Second)
 	return err
 }
 
-func (ClaudeRuntime) ExtractTranscripts(sandboxName, agentLabel, outputDir string) error {
+func (r ClaudeRuntime) ExtractTranscripts(sandboxName, agentLabel, outputDir string) error {
 	if err := os.MkdirAll(outputDir, 0o755); err != nil {
 		return fmt.Errorf("creating output dir: %w", err)
 	}
@@ -108,7 +123,7 @@ func (ClaudeRuntime) ExtractTranscripts(sandboxName, agentLabel, outputDir strin
 	}
 	defer root.Close()
 
-	configDir := sandbox.SandboxClaudeConfig
+	configDir := r.ConfigDir()
 	stdout, _, _, err := sandbox.Exec(sandboxName,
 		fmt.Sprintf("find %s -name '*.jsonl' 2>/dev/null || true", configDir),
 		10*time.Second,
@@ -149,11 +164,11 @@ func (ClaudeRuntime) ExtractTranscripts(sandboxName, agentLabel, outputDir strin
 	return nil
 }
 
-func (ClaudeRuntime) ExtractDebugLog(sandboxName, localPath, debug string) error {
+func (r ClaudeRuntime) ExtractDebugLog(sandboxName, localPath, debug string) error {
 	if debug == "" {
 		return nil
 	}
-	remotePath := sandbox.SandboxWorkspace + "/" + claudeDebugLog
+	remotePath := r.WorkspaceDir() + "/" + claudeDebugLog
 	return sandbox.DownloadFile(sandboxName, remotePath, localPath)
 }
 
