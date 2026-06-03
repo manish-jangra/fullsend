@@ -38,8 +38,8 @@ func (r ClaudeRuntime) Bootstrap(input BootstrapInput) error {
 	sandboxName := input.SandboxName()
 	configDir := r.ConfigDir()
 
-	mkdirCmd := fmt.Sprintf("mkdir -p %s/agents %s/skills %s/hooks %s/plugins",
-		configDir, configDir, configDir, configDir)
+	mkdirCmd := fmt.Sprintf("mkdir -p %s/agents %s/skills %s/plugins",
+		configDir, configDir, configDir)
 	if _, _, _, err := sandbox.Exec(sandboxName, mkdirCmd, 10*time.Second); err != nil {
 		return fmt.Errorf("creating runtime config dirs: %w", err)
 	}
@@ -220,6 +220,12 @@ func buildRunCommand(params RunParams) string {
 //   - {SandboxWorkspace}/.claude/settings.json — security Pre/PostToolUse hooks (here)
 // Keep these paths separate; merging them would mix plugin config with hook wiring.
 func installClaudeHooks(sandboxName string, hooks security.ClaudeSandboxHooks) error {
+	hooksDir := sandbox.SandboxWorkspace + "/.claude/hooks"
+	mkdirCmd := fmt.Sprintf("mkdir -p %s %s/.claude", hooksDir, sandbox.SandboxWorkspace)
+	if _, _, _, err := sandbox.Exec(sandboxName, mkdirCmd, 10*time.Second); err != nil {
+		return fmt.Errorf("creating Claude hooks dir: %w", err)
+	}
+
 	hookFiles := security.HookFiles(hooks)
 	for name, content := range hookFiles {
 		tmpFile, err := os.CreateTemp("", "fullsend-hook-*")

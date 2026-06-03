@@ -748,8 +748,10 @@ func runAgent(ctx context.Context, agentName, fullsendDir, outputBase, targetRep
 }
 
 func bootstrapCommon(sandboxName, repoDir, fullsendBinary string, h *harness.Harness) error {
-	mkdirCmd := fmt.Sprintf("mkdir -p %s/bin %s/.env.d %s/.security %s/.claude/hooks",
-		sandbox.SandboxWorkspace, sandbox.SandboxWorkspace, sandbox.SandboxWorkspace, sandbox.SandboxWorkspace)
+	// Runner-level dirs only; Claude hook scripts live under workspace/.claude/
+	// and are created in installClaudeHooks when ClaudeHooksBootstrap is present.
+	mkdirCmd := fmt.Sprintf("mkdir -p %s/bin %s/.env.d %s/.security",
+		sandbox.SandboxWorkspace, sandbox.SandboxWorkspace, sandbox.SandboxWorkspace)
 	if _, _, _, err := sandbox.Exec(sandboxName, mkdirCmd, 10*time.Second); err != nil {
 		return fmt.Errorf("creating workspace dirs: %w", err)
 	}
