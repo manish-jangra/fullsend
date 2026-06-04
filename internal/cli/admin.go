@@ -22,6 +22,7 @@ import (
 	"github.com/fullsend-ai/fullsend/internal/config"
 	"github.com/fullsend-ai/fullsend/internal/dispatch"
 	"github.com/fullsend-ai/fullsend/internal/dispatch/gcf"
+	"github.com/fullsend-ai/fullsend/internal/mintcore"
 	"github.com/fullsend-ai/fullsend/internal/forge"
 	gh "github.com/fullsend-ai/fullsend/internal/forge/github"
 	"github.com/fullsend-ai/fullsend/internal/inference"
@@ -105,8 +106,6 @@ var githubOwnerPattern = regexp.MustCompile(`^[a-zA-Z0-9](-?[a-zA-Z0-9])*$`)
 // (alphanumeric, hyphens, dots, and underscores).
 var githubRepoPattern = regexp.MustCompile(`^[a-zA-Z0-9]([a-zA-Z0-9._-]*[a-zA-Z0-9])?$`)
 
-// rolePattern validates agent role names (lowercase alphanumeric, hyphens, underscores).
-var rolePattern = regexp.MustCompile(`^[a-z][a-z0-9_-]*$`)
 
 // perOrgOnlyFlags are flags that only apply to per-org mode.
 var perOrgOnlyFlags = []string{
@@ -209,8 +208,8 @@ func parseAgentRoles(agents string) ([]string, error) {
 	var roles []string
 	for _, entry := range strings.Split(agents, ",") {
 		if trimmed := strings.TrimSpace(entry); trimmed != "" {
-			if !rolePattern.MatchString(trimmed) {
-				return nil, fmt.Errorf("invalid role name %q: must match %s", trimmed, rolePattern.String())
+			if !mintcore.RolePattern.MatchString(trimmed) {
+				return nil, fmt.Errorf("invalid role name %q: must match %s", trimmed, mintcore.RolePattern.String())
 			}
 			roles = append(roles, trimmed)
 		}
@@ -792,7 +791,7 @@ func runPerRepoInstall(ctx context.Context, c perRepoInstallConfig) error {
 			printer.StepInfo("Would provision WIF infrastructure in GCP project " + inferenceProject)
 			printer.StepInfo(fmt.Sprintf("  Service account: fullsend-mint@%s.iam.gserviceaccount.com", inferenceProject))
 			printer.StepInfo("  WIF pool: " + gcf.DefaultInferencePool)
-			printer.StepInfo(fmt.Sprintf("  WIF provider: %s", gcf.BuildRepoProviderID(owner, repo)))
+			printer.StepInfo(fmt.Sprintf("  WIF provider: %s", mintcore.BuildRepoProviderID(owner, repo)))
 			printer.StepInfo(fmt.Sprintf("  Repo restriction: %s/%s", owner, repo))
 			printer.Blank()
 		}

@@ -225,7 +225,7 @@ The installer automatically provisions [Workload Identity Federation (WIF)](http
 | `--mint-region` | `us-central1` | Cloud region for the token mint function |
 | `--mint-url` | | Use an existing mint at this URL instead of deploying one |
 | `--mint-provider` | `gcf` | Token mint provider backend |
-| `--mint-source-dir` | `internal/mint/` | Path to mint function source directory. When the path does not exist (e.g., running from a downloaded binary), the embedded source baked into the binary is used automatically |
+| `--mint-source-dir` | `internal/mint/` | Path to mint function source directory. The mint consists of two modules (`internal/mint/` and `internal/mintcore/`); the provisioner bundles `mintcore` from the sibling directory automatically. When the path does not exist (e.g., running from a downloaded binary), the embedded source baked into the binary is used instead |
 | `--public` | `false` | Create public unlisted GitHub Apps (for multi-org) |
 | `--app-set` | `fullsend-ai` | App set name prefix for GitHub Apps (see [Custom app sets](#custom-app-sets)) |
 | `--skip-app-setup` | `false` | Skip GitHub App creation (reuse existing apps) |

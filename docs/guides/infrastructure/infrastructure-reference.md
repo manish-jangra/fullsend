@@ -63,7 +63,7 @@ The mint is a GCP Cloud Function that exchanges GitHub OIDC tokens for scoped Gi
 │  │  6. Create Scoped Installation Token              │           │
 │  │     ├─ POST /installations/{id}/access_tokens     │           │
 │  │     ├─ Scope to requested repos[]                 │           │
-│  │     └─ Apply rolePermissions minimum set          │           │
+│  │     └─ Apply RolePermissions() minimum set         │           │
 │  │                                                   │           │
 │  └──────────┬───────────────────────────────────────┘           │
 │             │                                                   │
@@ -101,6 +101,19 @@ A single mint instance can serve multiple orgs:
 - `EnsureOrgInMint()` additively appends orgs to `ALLOWED_ORGS` env var
 - `ROLE_APP_IDS` maps `{org}/{role}` to GitHub App IDs
 - Updates are applied atomically by redeploying the function with updated env vars
+
+### Status Endpoint
+
+`GET /v1/status` returns the configured roles available for the authenticated caller's org.
+
+- **Authentication:** Bearer OIDC JWT (same as `/v1/token`)
+- **Authorization:** Any valid OIDC token from an allowed org — no role restriction
+- **Response:**
+  ```json
+  {"org": "my-org", "roles": ["coder", "review", "triage"]}
+  ```
+- **Use case:** Workflow diagnostics — discover which roles are available before requesting a token
+- **Security:** Returns only the requesting org and its role names (not app IDs, not other orgs' roles)
 
 ---
 
@@ -166,7 +179,7 @@ During installation, the GCF provisioner creates:
 2. **WIF Pool** — `fullsend-inference` for inference, `fullsend-pool` for mint
 3. **WIF Provider** — Maps GitHub OIDC claims to GCP attributes
 4. **IAM Bindings** — Grants `roles/aiplatform.user` to federated identities
-5. **Per-repo providers** (per-repo mode) — Scoped WIF provider per repository via `BuildRepoProviderID()`
+5. **Per-repo providers** (per-repo mode) — Scoped WIF provider per repository via `mintcore.BuildRepoProviderID()`
 
 ---
 

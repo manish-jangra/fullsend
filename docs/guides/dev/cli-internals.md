@@ -132,7 +132,7 @@ Both per-org and per-repo modes share the same core pipeline. The code follows t
 │  │  Both modes: ProvisionWIF() → create pool, provider, IAM   │ │
 │  │  ┌──────────────────────────────────────────┐              │ │
 │  │  │ Per-org:  org-wide WIF provider           │              │ │
-│  │  │ Per-repo: repo-scoped (BuildRepoProviderID)│             │ │
+│  │  │ Per-repo: repo-scoped (mintcore.BuildRepoProviderID)│     │ │
 │  │  └──────────────────────────────────────────┘              │ │
 │  └──────────┬─────────────────────────────────────────────────┘ │
 │             ▼                                                   │
@@ -191,7 +191,7 @@ Both modes call the same functions (`runAppSetup`, `gcf.NewProvisioner`, `Provis
 | **1. Discover** | `DiscoverMint()`, resolve app IDs | Discovers all org repos | Single repo validation |
 | **2. App setup** | `runAppSetup()` → PEMs + App IDs | All 7 roles by default | Excludes "fullsend" role |
 | **3. Mint** | `gcf.Provision()` or `EnsureOrgInMint()` | — | + `RegisterPerRepoWIF()` |
-| **4. WIF** | `ProvisionWIF()` | Org-wide provider ID | `BuildRepoProviderID()` (repo-scoped) |
+| **4. WIF** | `ProvisionWIF()` | Org-wide provider ID | `mintcore.BuildRepoProviderID()` (repo-scoped) |
 | **5. Scaffold** | `scaffold.PerRepoCustomizedDirs()` / `WalkFullsendRepo()` | Creates `.fullsend` repo, pushes workflows + optional binary | Writes `.fullsend/` dir + shim workflow + optional binary in target repo |
 | **6. Secrets** | Same secret names, same API calls | Config repo + org variable | Target repo + `PER_REPO_GUARD` |
 | **7. Enrollment** | — | `EnrollmentLayer` enables repos | No-op (self-contained) |
@@ -482,8 +482,9 @@ var executableFiles = map[string]struct{}{
 | `internal/cli/inference.go` | ~408 | Inference WIF provision/status |
 | `internal/cli/github.go` | ~966 | GitHub setup/set/status/uninstall/sync-scaffold/enroll/unenroll |
 | `internal/cli/run.go` | ~1923 | Agent execution lifecycle |
-| `internal/mint/main.go` | ~906 | GCF token mint service |
-| `internal/dispatch/gcf/provisioner.go` | ~1350 | GCP infrastructure provisioner |
+| `internal/mint/main.go` | ~95 | GCF token mint entry point (wiring only) |
+| `internal/mintcore/` | ~1425 | Shared mint library (handler, OIDC verifiers, GitHub API) |
+| `internal/dispatch/gcf/provisioner.go` | ~1959 | GCP infrastructure provisioner |
 | `internal/sandbox/sandbox.go` | ~459 | OpenShell sandbox operations |
 | `internal/harness/harness.go` | ~486 | Harness YAML parsing |
 | `internal/layers/layers.go` | ~159 | Layer interface and stack |

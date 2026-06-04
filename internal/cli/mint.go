@@ -28,6 +28,7 @@ import (
 	"github.com/fullsend-ai/fullsend/internal/appsetup"
 	"github.com/fullsend-ai/fullsend/internal/config"
 	"github.com/fullsend-ai/fullsend/internal/dispatch/gcf"
+	"github.com/fullsend-ai/fullsend/internal/mintcore"
 	"github.com/fullsend-ai/fullsend/internal/ui"
 )
 
@@ -787,7 +788,7 @@ func runMintEnrollRepo(ctx context.Context, printer *ui.Printer, repoFullName, p
 		printer.StepInfo(fmt.Sprintf("  Would add %s to ALLOWED_ORGS", owner))
 		printer.StepInfo(fmt.Sprintf("  Would copy PEMs from %s for %d roles", appSet, len(roleList)))
 		printer.StepInfo(fmt.Sprintf("  Would add %s to PER_REPO_WIF_REPOS", repoFullName))
-		printer.StepInfo(fmt.Sprintf("  Would create WIF provider: %s", gcf.BuildRepoProviderID(owner, repo)))
+		printer.StepInfo(fmt.Sprintf("  Would create WIF provider: %s", mintcore.BuildRepoProviderID(owner, repo)))
 		return nil
 	}
 
@@ -1170,7 +1171,7 @@ func runMintUnenrollRepo(ctx context.Context, printer *ui.Printer, repoFullName,
 	printer.StepDone("Mint verified")
 
 	if dryRun {
-		providerID := gcf.BuildRepoProviderID(owner, repo)
+		providerID := mintcore.BuildRepoProviderID(owner, repo)
 		printer.Blank()
 		printer.StepInfo("Dry run — no changes will be made")
 		printer.Blank()
@@ -1202,7 +1203,7 @@ func runMintUnenrollRepo(ctx context.Context, printer *ui.Printer, repoFullName,
 	printer.StepDone("Repo removed from PER_REPO_WIF_REPOS")
 
 	// Step 2: Disable or delete WIF provider.
-	providerID := gcf.BuildRepoProviderID(owner, repo)
+	providerID := mintcore.BuildRepoProviderID(owner, repo)
 	if deleteProvider {
 		printer.StepStart("Deleting WIF provider " + providerID)
 		if err := provisioner.DeleteWIFProvider(ctx, providerID); err != nil {

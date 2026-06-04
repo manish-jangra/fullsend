@@ -26,6 +26,7 @@ import (
 	"time"
 
 	"github.com/fullsend-ai/fullsend/internal/dispatch"
+	"github.com/fullsend-ai/fullsend/internal/mintcore"
 )
 
 // DeployMode controls Cloud Function deployment behavior.
@@ -41,16 +42,27 @@ const (
 // ErrFunctionNotFound is returned when the mint function does not exist.
 var ErrFunctionNotFound = errors.New("mint function not found")
 
-//go:embed mintsrc/go.mod.embed mintsrc/go.sum.embed mintsrc/main.go.embed
+//go:embed mintsrc/go.mod.embed mintsrc/go.sum.embed mintsrc/main.go.embed mintsrc/mintcore/go.mod.embed mintsrc/mintcore/go.sum.embed mintsrc/mintcore/gcp_pem.go.embed mintsrc/mintcore/github.go.embed mintsrc/mintcore/handler.go.embed mintsrc/mintcore/interfaces.go.embed mintsrc/mintcore/jwks_verifier.go.embed mintsrc/mintcore/claims.go.embed mintsrc/mintcore/patterns.go.embed mintsrc/mintcore/sts_verifier.go.embed mintsrc/mintcore/wif.go.embed
 var embeddedMintSource embed.FS
 
 // embeddedMintFiles maps embedded filenames (.embed suffix avoids
 // triggering Go's module boundary detection) to their real names for the
 // Cloud Function deployment zip.
 var embeddedMintFiles = map[string]string{
-	"go.mod.embed":  "go.mod",
-	"go.sum.embed":  "go.sum",
-	"main.go.embed": "main.go",
+	"go.mod.embed":                   "go.mod",
+	"go.sum.embed":                   "go.sum",
+	"main.go.embed":                  "main.go",
+	"mintcore/go.mod.embed":          "mintcore/go.mod",
+	"mintcore/go.sum.embed":          "mintcore/go.sum",
+	"mintcore/gcp_pem.go.embed":        "mintcore/gcp_pem.go",
+	"mintcore/github.go.embed":        "mintcore/github.go",
+	"mintcore/handler.go.embed":       "mintcore/handler.go",
+	"mintcore/interfaces.go.embed":    "mintcore/interfaces.go",
+	"mintcore/jwks_verifier.go.embed":  "mintcore/jwks_verifier.go",
+	"mintcore/claims.go.embed":        "mintcore/claims.go",
+	"mintcore/patterns.go.embed":      "mintcore/patterns.go",
+	"mintcore/sts_verifier.go.embed":  "mintcore/sts_verifier.go",
+	"mintcore/wif.go.embed":           "mintcore/wif.go",
 }
 
 // Compile-time check that Provisioner implements dispatch.Dispatcher.
@@ -62,10 +74,6 @@ func DefaultFunctionSourceDir() string {
 	return filepath.Join("internal", "mint")
 }
 
-// githubOrgPattern validates GitHub organization names: alphanumeric or single
-// hyphens, cannot start or end with a hyphen, max 39 characters.
-var githubOrgPattern = regexp.MustCompile(`^[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,37}[a-zA-Z0-9])?$`)
-
 // githubRepoSlugPattern validates a single GitHub repository name component.
 var githubRepoSlugPattern = regexp.MustCompile(`^[a-zA-Z0-9._-]{1,100}$`)
 
@@ -74,9 +82,6 @@ var gcpProjectIDPattern = regexp.MustCompile(`^[a-z][a-z0-9-]{4,28}[a-z0-9]$`)
 
 // gcpRegionPattern validates GCP region names (e.g. us-central1, europe-west4).
 var gcpRegionPattern = regexp.MustCompile(`^[a-z]+-[a-z]+[0-9]+$`)
-
-// rolePattern validates agent role names (must match Secret Manager ID constraints).
-var rolePattern = regexp.MustCompile(`^[a-z][a-z0-9_-]*$`)
 
 const (
 	saName          = "fullsend-mint"
@@ -180,11 +185,11 @@ func (p *Provisioner) StoreAgentPEM(ctx context.Context, org, role string, pemDa
 	if p.cfg.ProjectID == "" {
 		return fmt.Errorf("GCP project ID is required")
 	}
-	if !githubOrgPattern.MatchString(org) || strings.Contains(org, "--") {
+	if !mintcore.GitHubOrgPattern.MatchString(org) || strings.Contains(org, "--") {
 		return fmt.Errorf("invalid org name %q", org)
 	}
-	if !rolePattern.MatchString(role) || strings.Contains(role, "--") {
-		return fmt.Errorf("invalid role name %q: must match %s", role, rolePattern.String())
+	if !mintcore.RolePattern.MatchString(role) || strings.Contains(role, "--") {
+		return fmt.Errorf("invalid role name %q: must match %s", role, mintcore.RolePattern.String())
 	}
 
 	sid := secretID(org, role)
@@ -222,12 +227,12 @@ func (p *Provisioner) CopyAgentPEM(ctx context.Context, srcOrg, dstOrg, role str
 		return fmt.Errorf("GCP project ID is required")
 	}
 	for _, org := range []string{srcOrg, dstOrg} {
-		if !githubOrgPattern.MatchString(org) || strings.Contains(org, "--") {
+		if !mintcore.GitHubOrgPattern.MatchString(org) || strings.Contains(org, "--") {
 			return fmt.Errorf("invalid org name %q", org)
 		}
 	}
-	if !rolePattern.MatchString(role) || strings.Contains(role, "--") {
-		return fmt.Errorf("invalid role name %q: must match %s", role, rolePattern.String())
+	if !mintcore.RolePattern.MatchString(role) || strings.Contains(role, "--") {
+		return fmt.Errorf("invalid role name %q: must match %s", role, mintcore.RolePattern.String())
 	}
 
 	dstID := secretID(dstOrg, role)
@@ -527,7 +532,7 @@ func (p *Provisioner) Provision(ctx context.Context) (map[string]string, error) 
 	}
 	seen := make(map[string]bool)
 	for i, org := range p.cfg.GitHubOrgs {
-		if !githubOrgPattern.MatchString(org) || strings.Contains(org, "--") {
+		if !mintcore.GitHubOrgPattern.MatchString(org) || strings.Contains(org, "--") {
 			return nil, fmt.Errorf("invalid GitHub org name: %q", org)
 		}
 		lower := strings.ToLower(org)
@@ -538,13 +543,13 @@ func (p *Provisioner) Provision(ctx context.Context) (map[string]string, error) 
 		p.cfg.GitHubOrgs[i] = lower
 	}
 	for role := range p.cfg.AgentPEMs {
-		if !rolePattern.MatchString(role) {
-			return nil, fmt.Errorf("invalid role name %q: must match %s", role, rolePattern.String())
+		if !mintcore.RolePattern.MatchString(role) {
+			return nil, fmt.Errorf("invalid role name %q: must match %s", role, mintcore.RolePattern.String())
 		}
 	}
 	for role := range p.cfg.AgentAppIDs {
-		if !rolePattern.MatchString(role) {
-			return nil, fmt.Errorf("invalid role name %q: must match %s", role, rolePattern.String())
+		if !mintcore.RolePattern.MatchString(role) {
+			return nil, fmt.Errorf("invalid role name %q: must match %s", role, mintcore.RolePattern.String())
 		}
 	}
 
@@ -1064,7 +1069,7 @@ func mergeRoleAppIDs(existing, desired map[string]string) {
 }
 
 // PlaceholderOrg is the deploy-time placeholder used in the WIF condition
-// and env vars before any real orgs are enrolled. Must pass githubOrgPattern
+// and env vars before any real orgs are enrolled. Must pass mintcore.GitHubOrgPattern
 // validation (used by Provision), but should not collide with any real
 // GitHub org. The CLI rejects this value at enrollment time.
 const PlaceholderOrg = "x0fullsend0placeholder"
@@ -1120,24 +1125,6 @@ func deriveAllowedRoles(roleAppIDsJSON string) string {
 	return strings.Join(roles, ",")
 }
 
-// BuildRepoProviderID generates a GCP WIF provider ID scoped to a single repo.
-// GCP requires 4-32 chars, [a-z][a-z0-9-]*, no trailing hyphen.
-func BuildRepoProviderID(owner, repo string) string {
-	raw := fmt.Sprintf("gh-%s-%s", owner, repo)
-	raw = strings.ToLower(raw)
-	raw = strings.Map(func(r rune) rune {
-		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '-' {
-			return r
-		}
-		return '-'
-	}, raw)
-	if len(raw) > 32 {
-		raw = raw[:32]
-	}
-	raw = strings.TrimRight(raw, "-")
-	return raw
-}
-
 // buildAttributeCondition constructs a WIF CEL condition scoped to the
 // organization level via repository_owner. This allows any repo in the
 // org to authenticate — the mint's prevalidateOIDCToken already validates
@@ -1159,7 +1146,7 @@ const fullsendRepoSuffix = "/.fullsend"
 // Supports both the current org-scoped ("assertion.repository_owner == 'org'")
 // and legacy repo-scoped ("assertion.repository == 'org/.fullsend'") formats.
 //
-// The parser splits on single quotes and filters with githubOrgPattern, so it
+// The parser splits on single quotes and filters with mintcore.GitHubOrgPattern, so it
 // assumes conditions contain only org names as quoted values. If conditions are
 // ever extended with additional CEL clauses containing non-org quoted values,
 // this parser must be updated to avoid false-positive extraction.
@@ -1172,10 +1159,10 @@ func parseConditionOrgs(condition string) []string {
 		}
 		if strings.HasSuffix(part, fullsendRepoSuffix) {
 			org := strings.TrimSuffix(part, fullsendRepoSuffix)
-			if githubOrgPattern.MatchString(org) {
+			if mintcore.GitHubOrgPattern.MatchString(org) {
 				orgs = append(orgs, strings.ToLower(org))
 			}
-		} else if githubOrgPattern.MatchString(part) {
+		} else if mintcore.GitHubOrgPattern.MatchString(part) {
 			orgs = append(orgs, strings.ToLower(part))
 		}
 	}
@@ -1443,7 +1430,7 @@ func (p *Provisioner) ProvisionWIF(ctx context.Context) (wifProvider string, err
 	orgs := make([]string, len(p.cfg.GitHubOrgs))
 	seen := make(map[string]bool)
 	for i, org := range p.cfg.GitHubOrgs {
-		if !githubOrgPattern.MatchString(org) || strings.Contains(org, "--") {
+		if !mintcore.GitHubOrgPattern.MatchString(org) || strings.Contains(org, "--") {
 			return "", fmt.Errorf("invalid GitHub org name: %q", org)
 		}
 		lower := strings.ToLower(org)
@@ -1466,7 +1453,7 @@ func (p *Provisioner) ProvisionWIF(ctx context.Context) (wifProvider string, err
 		if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
 			return "", fmt.Errorf("repo must be in owner/repo format, got %q", p.cfg.Repo)
 		}
-		if !githubOrgPattern.MatchString(parts[0]) || strings.Contains(parts[0], "--") {
+		if !mintcore.GitHubOrgPattern.MatchString(parts[0]) || strings.Contains(parts[0], "--") {
 			return "", fmt.Errorf("invalid repo owner %q: must be a valid GitHub org/user name", origParts[0])
 		}
 		if !githubRepoSlugPattern.MatchString(parts[1]) {
@@ -1486,7 +1473,7 @@ func (p *Provisioner) ProvisionWIF(ctx context.Context) (wifProvider string, err
 		if err := p.gcpAPI.CreateWIFPool(ctx, projectNumber, p.cfg.WIFPoolName, "Fullsend GitHub OIDC Pool"); err != nil {
 			return "", fmt.Errorf("creating WIF pool: %w", err)
 		}
-		providerID = BuildRepoProviderID(parts[0], parts[1])
+		providerID = mintcore.BuildRepoProviderID(parts[0], parts[1])
 		attrCondition := fmt.Sprintf("assertion.repository == '%s'", repo)
 		audiences := []string{oidcAudience, iamAudience(projectNumber, p.cfg.WIFPoolName, providerID)}
 		if err := p.gcpAPI.CreateWIFProvider(ctx, projectNumber, p.cfg.WIFPoolName, providerID, OIDCProviderConfig{
@@ -1812,6 +1799,19 @@ func bundleFunctionSource(dir string) ([]byte, error) {
 		if err != nil {
 			return nil, fmt.Errorf("reading file %s: %w", entry.Name(), err)
 		}
+
+		// Rewrite replace directive for deployment: the local source uses
+		// ../mintcore (sibling dir) but the zip layout nests mintcore inside.
+		// Regex handles variable whitespace from `go mod tidy` reformatting.
+		if entry.Name() == "go.mod" {
+			original := string(data)
+			rewritten := mintcoreReplaceRe.ReplaceAllString(original, "=> ./mintcore")
+			if rewritten == original {
+				return nil, fmt.Errorf("go.mod missing expected replace directive '=> ../mintcore'")
+			}
+			data = []byte(rewritten)
+		}
+
 		f, err := w.Create(entry.Name())
 		if err != nil {
 			return nil, fmt.Errorf("creating zip entry %s: %w", entry.Name(), err)
@@ -1825,6 +1825,13 @@ func bundleFunctionSource(dir string) ([]byte, error) {
 		}
 	}
 
+	// Include the mintcore module as a subdirectory (sibling on disk,
+	// nested in the zip so the replace ./mintcore directive resolves).
+	mintcoreDir := filepath.Join(dir, "..", "mintcore")
+	if err := addDirToZip(w, mintcoreDir, "mintcore"); err != nil {
+		return nil, fmt.Errorf("bundling mintcore: %w", err)
+	}
+
 	if fileCount == 0 {
 		return nil, fmt.Errorf("no deployable source files found in %s", dir)
 	}
@@ -1836,6 +1843,61 @@ func bundleFunctionSource(dir string) ([]byte, error) {
 		return nil, fmt.Errorf("closing zip: %w", err)
 	}
 	return buf.Bytes(), nil
+}
+
+var mintcoreReplaceRe = regexp.MustCompile(`=>\s+\.\./mintcore\b`)
+
+var mintcoreAllowedExts = map[string]bool{
+	".go": true, ".mod": true, ".sum": true,
+}
+
+func addDirToZip(w *zip.Writer, srcDir, zipPrefix string) error {
+	absRoot, err := filepath.Abs(srcDir)
+	if err != nil {
+		return fmt.Errorf("resolving source directory: %w", err)
+	}
+	return addDirToZipRooted(w, absRoot, srcDir, zipPrefix)
+}
+
+func addDirToZipRooted(w *zip.Writer, absRoot, srcDir, zipPrefix string) error {
+	entries, err := os.ReadDir(srcDir)
+	if err != nil {
+		return fmt.Errorf("reading directory %s: %w", srcDir, err)
+	}
+	for _, entry := range entries {
+		if strings.HasPrefix(entry.Name(), ".") || strings.HasSuffix(entry.Name(), "_test.go") {
+			continue
+		}
+		if entry.Type()&os.ModeSymlink != 0 {
+			continue
+		}
+		fullPath := filepath.Join(srcDir, entry.Name())
+		absPath, err := filepath.Abs(fullPath)
+		if err != nil || !strings.HasPrefix(absPath, absRoot+string(filepath.Separator)) {
+			continue
+		}
+		if entry.IsDir() {
+			if err := addDirToZipRooted(w, absRoot, fullPath, zipPrefix+"/"+entry.Name()); err != nil {
+				return err
+			}
+			continue
+		}
+		if !mintcoreAllowedExts[filepath.Ext(entry.Name())] {
+			continue
+		}
+		data, err := os.ReadFile(fullPath)
+		if err != nil {
+			return fmt.Errorf("reading %s: %w", entry.Name(), err)
+		}
+		f, err := w.Create(zipPrefix + "/" + entry.Name())
+		if err != nil {
+			return fmt.Errorf("creating zip entry %s/%s: %w", zipPrefix, entry.Name(), err)
+		}
+		if _, err := f.Write(data); err != nil {
+			return fmt.Errorf("writing zip entry %s/%s: %w", zipPrefix, entry.Name(), err)
+		}
+	}
+	return nil
 }
 
 // bundleEmbeddedMintSource creates a zip archive from the mint source files

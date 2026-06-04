@@ -12,6 +12,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/fullsend-ai/fullsend/internal/mintcore"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -300,8 +301,13 @@ func (f *fakeGCFClient) GetProjectNumber(_ context.Context, _ string) (string, e
 func fakeFunctionSourceDir(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
-	os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module test\n\ngo 1.23\n"), 0644)
+	os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module test\n\ngo 1.23\n\nrequire mintcore v0.0.0\n\nreplace mintcore => ../mintcore\n"), 0644)
 	os.WriteFile(filepath.Join(dir, "main.go"), []byte("package function\n"), 0644)
+	// bundleFunctionSource expects a sibling mintcore directory at ../mintcore.
+	mintcoreDir := filepath.Join(dir, "..", "mintcore")
+	os.MkdirAll(mintcoreDir, 0755)
+	os.WriteFile(filepath.Join(mintcoreDir, "go.mod"), []byte("module mintcore\n\ngo 1.23\n"), 0644)
+	os.WriteFile(filepath.Join(mintcoreDir, "stub.go"), []byte("package mintcore\n"), 0644)
 	return dir
 }
 
@@ -1424,6 +1430,11 @@ func TestProvisioner_Provision_GetFunctionError(t *testing.T) {
 
 func TestBundleFunctionSource_EmptyDir(t *testing.T) {
 	dir := t.TempDir()
+	// Create sibling mintcore dir so addDirToZip doesn't fail first.
+	mintcoreDir := filepath.Join(dir, "..", "mintcore")
+	os.MkdirAll(mintcoreDir, 0755)
+	os.WriteFile(filepath.Join(mintcoreDir, "stub.go"), []byte("package mintcore\n"), 0644)
+
 	_, err := bundleFunctionSource(dir)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "no deployable source files")
@@ -1432,6 +1443,11 @@ func TestBundleFunctionSource_EmptyDir(t *testing.T) {
 func TestBundleFunctionSource_MissingGoMod(t *testing.T) {
 	dir := t.TempDir()
 	os.WriteFile(dir+"/main.go", []byte("package main"), 0644)
+	// Create sibling mintcore dir so addDirToZip doesn't fail first.
+	mintcoreDir := filepath.Join(dir, "..", "mintcore")
+	os.MkdirAll(mintcoreDir, 0755)
+	os.WriteFile(filepath.Join(mintcoreDir, "stub.go"), []byte("package mintcore\n"), 0644)
+
 	_, err := bundleFunctionSource(dir)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "missing go.mod")
@@ -1440,9 +1456,13 @@ func TestBundleFunctionSource_MissingGoMod(t *testing.T) {
 func TestBundleFunctionSource_SkipsTestFiles(t *testing.T) {
 	dir := t.TempDir()
 	os.WriteFile(dir+"/main.go", []byte("package main"), 0644)
-	os.WriteFile(dir+"/go.mod", []byte("module test"), 0644)
+	os.WriteFile(dir+"/go.mod", []byte("module test\n\nreplace mintcore => ../mintcore\n"), 0644)
 	os.WriteFile(dir+"/main_test.go", []byte("package main"), 0644)
 	os.WriteFile(dir+"/.hidden", []byte("hidden"), 0644)
+	// Create sibling mintcore dir so addDirToZip doesn't fail first.
+	mintcoreDir := filepath.Join(dir, "..", "mintcore")
+	os.MkdirAll(mintcoreDir, 0755)
+	os.WriteFile(filepath.Join(mintcoreDir, "stub.go"), []byte("package mintcore\n"), 0644)
 
 	data, err := bundleFunctionSource(dir)
 	require.NoError(t, err)
@@ -1510,12 +1530,24 @@ func TestBundleEmbeddedMintSource(t *testing.T) {
 	assert.Contains(t, names, "go.mod")
 	assert.Contains(t, names, "go.sum")
 	assert.Contains(t, names, "main.go")
-	assert.Len(t, names, 3)
+	assert.Contains(t, names, "mintcore/go.mod")
+	assert.Contains(t, names, "mintcore/gcp_pem.go")
+	assert.Contains(t, names, "mintcore/github.go")
+	assert.Contains(t, names, "mintcore/jwks_verifier.go")
+	assert.Contains(t, names, "mintcore/claims.go")
+	assert.Contains(t, names, "mintcore/patterns.go")
+	assert.Contains(t, names, "mintcore/sts_verifier.go")
+	assert.Contains(t, names, "mintcore/wif.go")
+	assert.Contains(t, names, "mintcore/handler.go")
+	assert.Contains(t, names, "mintcore/interfaces.go")
+	assert.Contains(t, names, "mintcore/go.sum")
+	assert.Len(t, names, 14)
 }
 
 func TestEmbeddedMintSource_MatchesOriginal(t *testing.T) {
 	// origDir is internal/mint/ relative to this test's package (internal/dispatch/gcf/).
 	origDir := filepath.Join("..", "..", "mint")
+	mintcoreDir := filepath.Join("..", "..", "mintcore")
 	entries, err := os.ReadDir(origDir)
 	if os.IsNotExist(err) {
 		t.Skipf("original mint source not available at %s (running outside repo)", origDir)
@@ -1524,14 +1556,26 @@ func TestEmbeddedMintSource_MatchesOriginal(t *testing.T) {
 
 	// Check that every embedded file matches its original.
 	for embeddedName, realName := range embeddedMintFiles {
-		orig, err := os.ReadFile(filepath.Join(origDir, realName))
+		var origPath string
+		if strings.HasPrefix(realName, "mintcore/") {
+			origPath = filepath.Join(mintcoreDir, strings.TrimPrefix(realName, "mintcore/"))
+		} else {
+			origPath = filepath.Join(origDir, realName)
+		}
+
+		orig, err := os.ReadFile(origPath)
 		require.NoError(t, err, "reading original %s", realName)
 
 		embedded, err := embeddedMintSource.ReadFile("mintsrc/" + embeddedName)
 		require.NoError(t, err, "reading embedded %s", embeddedName)
 
+		// The embedded go.mod uses ./mintcore while the original uses ../mintcore.
+		if realName == "go.mod" {
+			orig = []byte(strings.Replace(string(orig), "=> ../mintcore", "=> ./mintcore", 1))
+		}
+
 		assert.Equal(t, string(orig), string(embedded),
-			"mintsrc/%s is out of sync with internal/mint/%s — copy to internal/dispatch/gcf/mintsrc/%s to update",
+			"mintsrc/%s is out of sync with original %s — copy to internal/dispatch/gcf/mintsrc/%s to update",
 			embeddedName, realName, embeddedName)
 	}
 
@@ -1546,6 +1590,21 @@ func TestEmbeddedMintSource_MatchesOriginal(t *testing.T) {
 		}
 		if !knownReals[entry.Name()] {
 			t.Errorf("internal/mint/%s exists but is not in embeddedMintFiles — add it to mintsrc/ with .embed suffix", entry.Name())
+		}
+	}
+
+	// Check mintcore files too.
+	mintcoreEntries, err := os.ReadDir(mintcoreDir)
+	if err == nil {
+		for _, entry := range mintcoreEntries {
+			if entry.IsDir() || strings.HasPrefix(entry.Name(), ".") || strings.HasSuffix(entry.Name(), "_test.go") {
+				continue
+			}
+			// go.sum is now included in embeddedMintFiles.
+			expected := "mintcore/" + entry.Name()
+			if !knownReals[expected] {
+				t.Errorf("internal/mintcore/%s exists but is not in embeddedMintFiles — add it to mintsrc/mintcore/ with .embed suffix", entry.Name())
+			}
 		}
 	}
 }
@@ -2081,7 +2140,7 @@ func TestBuildRepoProviderID(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.owner+"/"+tt.repo, func(t *testing.T) {
-			got := BuildRepoProviderID(tt.owner, tt.repo)
+			got := mintcore.BuildRepoProviderID(tt.owner, tt.repo)
 			assert.Equal(t, tt.want, got)
 			assert.GreaterOrEqual(t, len(got), 4)
 			assert.LessOrEqual(t, len(got), 32)

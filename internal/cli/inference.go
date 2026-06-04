@@ -9,6 +9,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/fullsend-ai/fullsend/internal/dispatch/gcf"
+	"github.com/fullsend-ai/fullsend/internal/mintcore"
 	"github.com/fullsend-ai/fullsend/internal/ui"
 )
 
@@ -135,7 +136,7 @@ func runInferenceProvisionDryRun(cmd *cobra.Command, printer *ui.Printer, org, r
 		printer.Blank()
 		printer.StepInfo(fmt.Sprintf("Repository:   %s", repo))
 		parts := strings.SplitN(repo, "/", 2)
-		providerID := gcf.BuildRepoProviderID(parts[0], parts[1])
+		providerID := mintcore.BuildRepoProviderID(parts[0], parts[1])
 		printer.StepInfo(fmt.Sprintf("WIF provider: %s (repo-scoped)", providerID))
 		printer.StepInfo(fmt.Sprintf("Condition:    assertion.repository == '%s'", strings.ToLower(repo)))
 	} else {
@@ -285,7 +286,7 @@ func runInferenceStatus(cmd *cobra.Command, org, repo, project, pool, provider, 
 	providerName := provider
 	if repo != "" {
 		parts := strings.SplitN(repo, "/", 2)
-		providerName = gcf.BuildRepoProviderID(parts[0], parts[1])
+		providerName = mintcore.BuildRepoProviderID(parts[0], parts[1])
 	}
 
 	result := &inferenceStatusResult{
@@ -505,7 +506,7 @@ func runInferenceDeprovisionDryRun(printer *ui.Printer, org, repo, project, pool
 		printer.Header("Dry run: deprovision repo " + repo + " from inference")
 		printer.Blank()
 		parts := strings.SplitN(repo, "/", 2)
-		providerID := gcf.BuildRepoProviderID(parts[0], parts[1])
+		providerID := mintcore.BuildRepoProviderID(parts[0], parts[1])
 		printer.StepInfo(fmt.Sprintf("Repository:   %s", repo))
 		printer.StepInfo(fmt.Sprintf("GCP project:  %s", project))
 		printer.StepInfo(fmt.Sprintf("WIF pool:     %s", pool))
@@ -543,7 +544,7 @@ func runInferenceDeprovision(cmd *cobra.Command, printer *ui.Printer, org, repo,
 		printer.Blank()
 
 		parts := strings.SplitN(repo, "/", 2)
-		providerID := gcf.BuildRepoProviderID(parts[0], parts[1])
+		providerID := mintcore.BuildRepoProviderID(parts[0], parts[1])
 
 		provisioner := gcf.NewProvisioner(gcf.Config{
 			ProjectID:   project,
