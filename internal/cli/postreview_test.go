@@ -518,15 +518,15 @@ func TestDismissStaleRequestChanges(t *testing.T) {
 			wantDismissed: 0,
 		},
 		{
-			name:     "multiple CR reviews dismisses most recent only",
+			name:     "multiple CR reviews dismisses all",
 			user:     "bot",
 			newEvent: "COMMENT",
 			reviews: []forge.PullRequestReview{
 				{ID: 100, User: "bot", State: "CHANGES_REQUESTED"},
 				{ID: 200, User: "bot", State: "CHANGES_REQUESTED"},
 			},
-			wantDismissed: 1,
-			wantReviewID:  200,
+			wantDismissed: 2,
+			wantReviewID:  100,
 		},
 		{
 			name:     "dismiss API error is non-fatal",
@@ -556,6 +556,38 @@ func TestDismissStaleRequestChanges(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestSubmitFormalReview_DismissesAllStaleRequestChanges(t *testing.T) {
+	fc := forge.NewFakeClient()
+	fc.AuthenticatedUser = "fullsend-bot"
+	fc.PRReviews = map[string][]forge.PullRequestReview{
+		"acme/repo/1": {
+			{ID: 100, NodeID: "PRR_100", User: "fullsend-bot", State: "CHANGES_REQUESTED", Body: "fix this"},
+			{ID: 200, NodeID: "PRR_200", User: "someone-else", State: "CHANGES_REQUESTED", Body: "human review"},
+			{ID: 300, NodeID: "PRR_300", User: "fullsend-bot", State: "CHANGES_REQUESTED", Body: "still broken"},
+			{ID: 400, NodeID: "PRR_400", User: "fullsend-bot", State: "CHANGES_REQUESTED", Body: "try again"},
+			{ID: 500, NodeID: "PRR_500", User: "fullsend-bot", State: "COMMENTED", Body: "note"},
+		},
+	}
+
+	printer := ui.New(io.Discard)
+	err := submitFormalReview(context.Background(), fc, "acme", "repo", 1, "comment", "", "", nil, false, printer)
+	require.NoError(t, err)
+
+	// All 3 CHANGES_REQUESTED reviews by the bot should be dismissed.
+	require.Len(t, fc.DismissedReviews, 3)
+	assert.Equal(t, 100, fc.DismissedReviews[0].ReviewID)
+	assert.Equal(t, 300, fc.DismissedReviews[1].ReviewID)
+	assert.Equal(t, 400, fc.DismissedReviews[2].ReviewID)
+
+	// The other user's review must not be dismissed.
+	for _, d := range fc.DismissedReviews {
+		assert.NotEqual(t, 200, d.ReviewID)
+	}
+
+	// COMMENT events skip formal review submission.
+	assert.Empty(t, fc.CreatedReviews)
 }
 
 func TestSubmitFormalReview_AuthErrorSkipsCleanup(t *testing.T) {

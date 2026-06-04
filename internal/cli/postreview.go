@@ -432,15 +432,16 @@ func postApprovedFollowUpIssues(_ context.Context, _, _ string, _ int, parsed Re
 	return nil
 }
 
-// dismissStaleRequestChanges dismisses the most recent CHANGES_REQUESTED
-// review by the authenticated user when the new verdict is softer.
+// dismissStaleRequestChanges dismisses all CHANGES_REQUESTED reviews
+// by the authenticated user when the new verdict is softer (comment or
+// approve). This ensures that stale blocking reviews do not persist
+// after the bot has cleared its objections.
 func dismissStaleRequestChanges(ctx context.Context, client forge.Client, owner, repo string, pr int, newEvent, user string, reviews []forge.PullRequestReview, printer *ui.Printer) {
 	if newEvent == "REQUEST_CHANGES" {
 		return
 	}
 
-	for i := len(reviews) - 1; i >= 0; i-- {
-		r := reviews[i]
+	for _, r := range reviews {
 		if r.User != user || r.State != "CHANGES_REQUESTED" {
 			continue
 		}
@@ -450,7 +451,6 @@ func dismissStaleRequestChanges(ctx context.Context, client forge.Client, owner,
 		} else {
 			printer.StepDone("Stale review dismissed")
 		}
-		break
 	}
 }
 
