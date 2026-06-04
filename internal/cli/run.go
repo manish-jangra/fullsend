@@ -1037,6 +1037,21 @@ func envToList(env map[string]string) []string {
 	return list
 }
 
+// openTeeReader wraps r in an io.TeeReader that copies to the file at
+// outputPath, returning the reader and a closer. If outputPath is empty or
+// the file cannot be created, r is returned unchanged and the warn is logged.
+func openTeeReader(r io.Reader, outputPath string, printer *ui.Printer) (io.Reader, func()) {
+	if outputPath == "" {
+		return r, func() {}
+	}
+	f, err := os.Create(outputPath)
+	if err != nil {
+		printer.StepWarn("Failed to create claude-output.jsonl: " + err.Error())
+		return r, func() {}
+	}
+	return io.TeeReader(r, f), func() { f.Close() }
+}
+
 var heartbeatInterval = 30 * time.Second
 
 func runHeartbeat(printer *ui.Printer, start time.Time, timeout time.Duration, done <-chan struct{}) {
