@@ -31,8 +31,23 @@ type installationResponse struct {
 
 // installationTokenResponse is the response from POST /app/installations/{id}/access_tokens.
 type installationTokenResponse struct {
-	Token     string `json:"token"`
-	ExpiresAt string `json:"expires_at"`
+	Token               string                       `json:"token"`
+	ExpiresAt           string                       `json:"expires_at"`
+	Permissions         map[string]string             `json:"permissions,omitempty"`
+	Repositories        []installationTokenRepository `json:"repositories,omitempty"`
+	RepositorySelection string                        `json:"repository_selection,omitempty"`
+}
+
+// installationTokenRepository is a repo entry in the installation token response.
+type installationTokenRepository struct {
+	FullName string `json:"full_name"`
+}
+
+// GrantedScope holds the actual scope GitHub granted for the installation token.
+type GrantedScope struct {
+	Repos         []string
+	Permissions   map[string]string
+	RepoSelection string
 }
 
 // canonicalRolePermissions defines the minimum GitHub App permissions per agent role.
@@ -181,10 +196,10 @@ func FindInstallation(ctx context.Context, httpClient HTTPDoer, githubBaseURL, j
 
 // CreateInstallationToken exchanges a JWT for an installation access token,
 // scoped to the given repos and role-specific permissions.
-func CreateInstallationToken(ctx context.Context, httpClient HTTPDoer, githubBaseURL, jwt string, installationID int64, role string, repos []string) (string, string, error) {
+func CreateInstallationToken(ctx context.Context, httpClient HTTPDoer, githubBaseURL, jwt string, installationID int64, role string, repos []string) (string, string, *GrantedScope, error) {
 	perms := RolePermissionsFor(role)
 	if perms == nil {
-		return "", "", fmt.Errorf("no permissions defined for role %q", role)
+		return "", "", nil, fmt.Errorf("no permissions defined for role %q", role)
 	}
 	tokenReqBody := map[string]interface{}{
 		"repositories": repos,
@@ -193,13 +208,13 @@ func CreateInstallationToken(ctx context.Context, httpClient HTTPDoer, githubBas
 
 	tokenReqBytes, err := json.Marshal(tokenReqBody)
 	if err != nil {
-		return "", "", fmt.Errorf("marshaling token request: %w", err)
+		return "", "", nil, fmt.Errorf("marshaling token request: %w", err)
 	}
 
 	reqURL := fmt.Sprintf("%s/app/installations/%d/access_tokens", githubBaseURL, installationID)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, reqURL, bytes.NewReader(tokenReqBytes))
 	if err != nil {
-		return "", "", fmt.Errorf("creating token request: %w", err)
+		return "", "", nil, fmt.Errorf("creating token request: %w", err)
 	}
 	req.Header.Set("Authorization", "Bearer "+jwt)
 	req.Header.Set("Accept", "application/vnd.github+json")
@@ -207,23 +222,31 @@ func CreateInstallationToken(ctx context.Context, httpClient HTTPDoer, githubBas
 
 	resp, err := httpClient.Do(req)
 	if err != nil {
-		return "", "", fmt.Errorf("creating installation token: %w", err)
+		return "", "", nil, fmt.Errorf("creating installation token: %w", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusCreated {
 		io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
-		return "", "", fmt.Errorf("creating installation token returned status %d", resp.StatusCode)
+		return "", "", nil, fmt.Errorf("creating installation token returned status %d", resp.StatusCode)
 	}
 
 	var tokenResp installationTokenResponse
 	if err := json.NewDecoder(resp.Body).Decode(&tokenResp); err != nil {
-		return "", "", fmt.Errorf("decoding token response: %w", err)
+		return "", "", nil, fmt.Errorf("decoding token response: %w", err)
 	}
 
 	if tokenResp.Token == "" {
-		return "", "", fmt.Errorf("empty installation token returned")
+		return "", "", nil, fmt.Errorf("empty installation token returned")
 	}
 
-	return tokenResp.Token, tokenResp.ExpiresAt, nil
+	granted := &GrantedScope{
+		Permissions:   tokenResp.Permissions,
+		RepoSelection: tokenResp.RepositorySelection,
+	}
+	for _, r := range tokenResp.Repositories {
+		granted.Repos = append(granted.Repos, r.FullName)
+	}
+
+	return tokenResp.Token, tokenResp.ExpiresAt, granted, nil
 }

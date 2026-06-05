@@ -24,8 +24,11 @@ type mintRequest struct {
 
 // mintResponse is returned on success.
 type mintResponse struct {
-	Token     string `json:"token"`
-	ExpiresAt string `json:"expires_at"`
+	Token         string            `json:"token"`
+	ExpiresAt     string            `json:"expires_at"`
+	GrantedRepos  []string          `json:"granted_repos,omitempty"`
+	GrantedPerms  map[string]string `json:"granted_permissions,omitempty"`
+	RepoSelection string            `json:"repository_selection,omitempty"`
 }
 
 // statusResponse is returned by the /v1/status diagnostic endpoint.
@@ -201,7 +204,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	org := strings.ToLower(claims.RepositoryOwner)
 
-	token, expiresAt, err := h.mintToken(ctx, org, req.Role, req.Repos)
+	token, expiresAt, granted, err := h.mintToken(ctx, org, req.Role, req.Repos)
 	if err != nil {
 		log.Printf("failed to mint token: org=%s role=%s err=%v", org, req.Role, err)
 		var me *mintError
@@ -213,15 +216,38 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	log.Printf("minted: org=%s role=%s repo_count=%d", org, req.Role, len(req.Repos))
+	log.Printf("minted: org=%s role=%s requested_repos=%v source_repo=%s workflow_ref=%s",
+		org, req.Role, req.Repos, claims.Repository, claims.JobWorkflowRef)
+	if granted != nil {
+		log.Printf("granted scope: repos=%v permissions=%v repo_selection=%s",
+			granted.Repos, granted.Permissions, granted.RepoSelection)
+		if granted.RepoSelection == "all" {
+			log.Printf("WARNING: token granted with repository_selection=all (requested specific repos: %v)", req.Repos)
+		}
+		requested := RolePermissionsFor(req.Role)
+		for perm, level := range granted.Permissions {
+			if reqLevel, ok := requested[perm]; !ok {
+				log.Printf("WARNING: extra permission granted: %s=%s (not requested)", perm, level)
+			} else if level != reqLevel {
+				log.Printf("WARNING: permission level mismatch: %s requested=%s granted=%s", perm, reqLevel, level)
+			}
+		}
+	}
+
+	resp := mintResponse{
+		Token:     token,
+		ExpiresAt: expiresAt,
+	}
+	if granted != nil {
+		resp.GrantedRepos = granted.Repos
+		resp.GrantedPerms = granted.Permissions
+		resp.RepoSelection = granted.RepoSelection
+	}
 
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(mintResponse{
-		Token:     token,
-		ExpiresAt: expiresAt,
-	})
+	json.NewEncoder(w).Encode(resp)
 }
 
 func (h *Handler) handleStatus(w http.ResponseWriter, claims *Claims) {
@@ -248,15 +274,15 @@ func (h *Handler) handleStatus(w http.ResponseWriter, claims *Claims) {
 	}
 }
 
-func (h *Handler) mintToken(ctx context.Context, org, role string, repos []string) (string, string, error) {
+func (h *Handler) mintToken(ctx context.Context, org, role string, repos []string) (string, string, *GrantedScope, error) {
 	appID, err := h.lookupRoleAppID(org, role)
 	if err != nil {
-		return "", "", &mintError{status: http.StatusForbidden, msg: fmt.Sprintf("looking up app ID for role %s: %v", role, err)}
+		return "", "", nil, &mintError{status: http.StatusForbidden, msg: fmt.Sprintf("looking up app ID for role %s: %v", role, err)}
 	}
 
 	pemData, err := h.pemAccessor.AccessPEM(ctx, org, role)
 	if err != nil {
-		return "", "", &mintError{status: http.StatusForbidden, msg: fmt.Sprintf("reading PEM secret for role %s: %v", role, err)}
+		return "", "", nil, &mintError{status: http.StatusForbidden, msg: fmt.Sprintf("reading PEM secret for role %s: %v", role, err)}
 	}
 	defer func() {
 		for i := range pemData {
@@ -266,20 +292,20 @@ func (h *Handler) mintToken(ctx context.Context, org, role string, repos []strin
 
 	jwt, err := GenerateAppJWT(appID, pemData)
 	if err != nil {
-		return "", "", &mintError{status: http.StatusInternalServerError, msg: fmt.Sprintf("generating app JWT: %v", err)}
+		return "", "", nil, &mintError{status: http.StatusInternalServerError, msg: fmt.Sprintf("generating app JWT: %v", err)}
 	}
 
 	installationID, err := FindInstallation(ctx, h.httpClient, h.githubBaseURL, jwt, org, repos[0])
 	if err != nil {
-		return "", "", &mintError{status: http.StatusBadGateway, msg: err.Error()}
+		return "", "", nil, &mintError{status: http.StatusBadGateway, msg: err.Error()}
 	}
 
-	token, expiresAt, err := CreateInstallationToken(ctx, h.httpClient, h.githubBaseURL, jwt, installationID, role, repos)
+	token, expiresAt, granted, err := CreateInstallationToken(ctx, h.httpClient, h.githubBaseURL, jwt, installationID, role, repos)
 	if err != nil {
-		return "", "", &mintError{status: http.StatusBadGateway, msg: err.Error()}
+		return "", "", nil, &mintError{status: http.StatusBadGateway, msg: err.Error()}
 	}
 
-	return token, expiresAt, nil
+	return token, expiresAt, granted, nil
 }
 
 func (h *Handler) checkAllowedRole(role string) bool {
