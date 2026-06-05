@@ -76,7 +76,7 @@ remove_label() {
 # add or remove these via label_actions. This list covers labels that the
 # pipeline itself applies (pre-triage.sh resets the first four; the action
 # handlers apply blocked/triaged/feature).
-CONTROL_LABELS=("needs-info" "ready-to-code" "duplicate" "feature" "blocked" "triaged")
+CONTROL_LABELS=("needs-info" "ready-to-code" "duplicate" "feature" "blocked" "triaged" "question")
 
 is_control_label() {
   local label="$1"
@@ -178,6 +178,16 @@ case "${ACTION}" in
         add_label "triaged"
         ;;
     esac
+    ;;
+
+  question)
+    if [[ -z "${COMMENT}" ]]; then
+      echo "ERROR: action is 'question' but no comment provided"
+      exit 1
+    fi
+    remove_label "blocked"
+    remove_label "needs-info"
+    add_label "question"
     ;;
 
   *)

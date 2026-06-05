@@ -95,6 +95,7 @@ Use this phased approach to evaluate the issue:
 - What component or feature is affected?
 - Is this a regression, new bug, or misunderstanding?
 - Is there any version or timeline information?
+- **Is this a question?** If the issue is asking for information rather than reporting a defect or requesting a change, use the `question` action instead of proceeding to deeper investigation. Questions typically use interrogative phrasing and describe no concrete problem or desired behavior change.
 
 ### Phase 2 — Deep investigation
 - Are exact error messages or logs provided?
@@ -126,6 +127,25 @@ Calculate overall clarity: `symptom*0.35 + cause*0.30 + reproduction*0.20 + impa
 ## Step 4: Decide and write result
 
 Based on your assessment, choose exactly one action and write the result as JSON to `$FULLSEND_OUTPUT_DIR/agent-result.json`.
+
+### Action: `question`
+
+The issue is a support request or question rather than a bug report, feature request, or other actionable work item. The reporter is asking for information, not requesting a change.
+
+Detect question-style issues by looking for:
+- Interrogative phrasing ("Why don't we…?", "Does X support…?", "How do I…?")
+- No described defect, missing feature, or requested change
+- The reporter seeking to understand existing behavior rather than change it
+
+When you identify a question, attempt to answer it using the repository context gathered in Step 2. Then ask the reporter whether the question has been answered or whether they want to convert the issue into a feature request.
+
+```json
+{
+  "action": "question",
+  "reasoning": "Brief explanation of why this is a question rather than a bug or feature request",
+  "comment": "Your answer to the question, followed by a prompt asking whether the reporter wants to convert this into a feature request or close the issue. Be helpful and specific — use repository context to give a substantive answer rather than a generic response."
+}
+```
 
 ### Action: `insufficient`
 

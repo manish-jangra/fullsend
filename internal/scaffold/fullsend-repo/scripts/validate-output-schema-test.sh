@@ -66,6 +66,10 @@ run_test "valid-duplicate" \
   '{"action":"duplicate","reasoning":"same as #10","duplicate_of":10,"comment":"Duplicate of #10."}' \
   "true"
 
+run_test "valid-question" \
+  '{"action":"question","reasoning":"this is a support question","comment":"Based on the docs, Python 4 is not supported. Would you like to open a feature request?"}' \
+  "true"
+
 run_test "valid-blocked-issue" \
   '{"action":"blocked","reasoning":"upstream dependency","blocked_by":"https://github.com/org/repo/issues/99","comment":"Blocked on upstream."}' \
   "true"

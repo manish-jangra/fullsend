@@ -217,6 +217,31 @@ run_test "blocked-missing-comment-fails" \
   "" \
   "true"
 
+run_test "question-posts-comment" \
+  '{"action":"question","reasoning":"issue is asking a question","comment":"Based on the repository docs, Python 4 is not currently supported.\n\nDid this answer your question, or would you like to open a feature request for Python 4 support?"}' \
+  "gh issue comment 42 --repo test-org/test-repo --body-file -"
+
+run_test "question-applies-question-label" \
+  '{"action":"question","reasoning":"issue is asking a question","comment":"Based on the repository docs, Python 4 is not currently supported.\n\nDid this answer your question, or would you like to open a feature request for Python 4 support?"}' \
+  "gh api repos/test-org/test-repo/issues/42/labels -f labels[]=question --silent"
+
+run_test "question-removes-blocked-label" \
+  '{"action":"question","reasoning":"issue is asking a question","comment":"Based on the repository docs, Python 4 is not currently supported."}' \
+  "gh api repos/test-org/test-repo/issues/42/labels/blocked -X DELETE --silent"
+
+run_test "question-removes-needs-info-label" \
+  '{"action":"question","reasoning":"issue is asking a question","comment":"Based on the repository docs, Python 4 is not currently supported."}' \
+  "gh api repos/test-org/test-repo/issues/42/labels/needs-info -X DELETE --silent"
+
+run_test "question-missing-comment-fails" \
+  '{"action":"question","reasoning":"issue is asking a question"}' \
+  "" \
+  "true"
+
+run_test_stdout "question-control-label-refused" \
+  '{"action":"question","reasoning":"issue is asking a question","comment":"Answer here.","label_actions":{"reason":"Tried to set question label.","actions":[{"action":"add","label":"question"}]}}' \
+  "::warning::Refused to add control label 'question' -- control labels are managed by the triage pipeline"
+
 run_test "unknown-action-fails" \
   '{"action":"not_a_bug","reasoning":"working as intended","comment":"This is working as intended."}' \
   "" \
