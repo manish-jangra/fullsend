@@ -41,6 +41,7 @@ outcome and the post-script applies the corresponding label.
 | `triaged` | The issue is fully specified but is a feature or other category that requires human prioritization before coding. |
 | `duplicate` | The issue duplicates an existing one. The agent identified the original and the post-script closes the issue. |
 | `blocked` | The issue depends on another issue or external condition. The agent identified the blocker. |
+| `question` | The issue is a support request or question, not an actionable bug or feature. The agent attempted to answer it. |
 
 The `issue-labels` skill may also apply contextual labels (e.g., `area/api`,
 `kind/bug`) but these are informational — they do not control agent behavior.
@@ -79,7 +80,7 @@ invent labels or apply labels not listed here.
 ## Control labels (never recommend these)
 
 These are managed by the triage pipeline. Never include them in `label_actions`:
-`needs-info`, `ready-to-code`, `duplicate`, `blocked`, `triaged`.
+`needs-info`, `ready-to-code`, `duplicate`, `blocked`, `triaged`, `question`.
 
 ## Area labels
 
