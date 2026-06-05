@@ -80,7 +80,7 @@ invent labels or apply labels not listed here.
 ## Control labels (never recommend these)
 
 These are managed by the triage pipeline. Never include them in `label_actions`:
-`needs-info`, `ready-to-code`, `duplicate`, `blocked`, `triaged`.
+`needs-info`, `ready-to-code`, `duplicate`, `blocked`, `triaged`, `question`.
 
 ## Area labels
 

@@ -74,7 +74,7 @@ remove_label() {
 
 # Control labels managed by the triage pipeline. The post script refuses to
 # add or remove these via label_actions. This list covers labels that the
-# pipeline itself applies (pre-triage.sh resets the first four; the action
+# pipeline itself applies (pre-triage.sh resets the first five; the action
 # handlers apply blocked/triaged/feature).
 CONTROL_LABELS=("needs-info" "ready-to-code" "duplicate" "feature" "blocked" "triaged" "question")
 
