@@ -845,6 +845,32 @@ func TestPrioritizeHarnessContent(t *testing.T) {
 	assert.Contains(t, s, "PROJECT_NUMBER")
 }
 
+func TestAllScaffoldYAMLDocumentStartMarker(t *testing.T) {
+	// yamllint document-start rule requires --- at the top of every YAML file.
+	// Walk all scaffold YAML/YML files and verify each starts with "---\n".
+	scaffoldRoot := "fullsend-repo"
+	var checked int
+	err := filepath.WalkDir(scaffoldRoot, func(path string, d fs.DirEntry, walkErr error) error {
+		if walkErr != nil || d.IsDir() {
+			return walkErr
+		}
+		if !strings.HasSuffix(path, ".yaml") && !strings.HasSuffix(path, ".yml") {
+			return nil
+		}
+		content, readErr := os.ReadFile(path)
+		if readErr != nil {
+			return readErr
+		}
+		relPath := path[len(scaffoldRoot)+1:]
+		assert.True(t, strings.HasPrefix(string(content), "---\n"),
+			"%s must start with YAML document start marker (---)", relPath)
+		checked++
+		return nil
+	})
+	require.NoError(t, err)
+	assert.True(t, checked >= 20, "expected at least 20 YAML files, got %d", checked)
+}
+
 func TestValidateTriageDeleted(t *testing.T) {
 	_, err := FullsendRepoFile("scripts/validate-triage.sh")
 	assert.Error(t, err, "validate-triage.sh should have been deleted")
