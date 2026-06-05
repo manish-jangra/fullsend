@@ -52,7 +52,7 @@ chore(ci): update goreleaser to v2
 
 ### Why this matters
 
-GoReleaser groups changelog entries by type prefix (see `.goreleaser.yml`). Commits without a recognized prefix land under "Others". Commits prefixed `docs:`, `test:`, or `chore:` are excluded from release notes entirely. A wrong prefix means the change shows up in the wrong section — or not at all.
+GoReleaser groups changelog entries by type prefix (see `.goreleaser.yml`). Commits without a recognized prefix land under "Others". Commits prefixed `docs:`, `test:`, `chore:`, `ci:`, or `build:` are excluded from release notes entirely. A wrong prefix means the change shows up in the wrong section — or not at all.
 
 ## Pull request workflow
 
