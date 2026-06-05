@@ -22,16 +22,29 @@ jobs:
       - name: Checkout .fullsend
         uses: actions/checkout@v6
 
-      - name: Extract enrolled repo names from config
+      - name: Extract repo names from config
         id: repo-list
         run: |
-          REPOS=$(yq '[.repos | to_entries[] | select(.value.enabled == true) | .key] | join(",")' config.yaml)
-          if [[ -z "$REPOS" ]]; then
-            echo "::notice::No enabled repos found in config.yaml — nothing to do"
+          # Collect ALL repos (enabled + disabled) so the minted token has
+          # access to disabled repos too. Without this, the reconcile script
+          # silently skips unenrollment because API calls to repos outside
+          # the token scope fail and get swallowed by error suppression.
+          ENABLED=$(yq '[.repos | to_entries[] | select(.value.enabled == true) | .key] | join(",")' config.yaml)
+          DISABLED=$(yq '[.repos | to_entries[] | select(.value.enabled == false) | .key] | join(",")' config.yaml)
+          ALL=""
+          if [[ -n "$ENABLED" && -n "$DISABLED" ]]; then
+            ALL="$ENABLED,$DISABLED"
+          elif [[ -n "$ENABLED" ]]; then
+            ALL="$ENABLED"
+          elif [[ -n "$DISABLED" ]]; then
+            ALL="$DISABLED"
+          fi
+          if [[ -z "$ALL" ]]; then
+            echo "::notice::No repos found in config.yaml — nothing to do"
             echo "skip=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          echo "names=$REPOS" >> "$GITHUB_OUTPUT"
+          echo "names=$ALL" >> "$GITHUB_OUTPUT"
 
       - name: Checkout upstream scripts
         if: steps.repo-list.outputs.skip != 'true'

@@ -418,15 +418,19 @@ Files over 64KB save fine if they contain only ASCII characters.`
 		"issue should have a triage label (needs-info, ready-to-code, duplicate, or blocked), got: %v", labelNames)
 }
 
-// saveWorkflowRunDebugInfo fetches logs and artifacts for a failed workflow run
-// and saves them to the screenshot directory. Use this from any test phase that
-// watches a workflow run and needs to capture debug info on failure.
+// saveWorkflowRunDebugInfo fetches logs and artifacts for a workflow run and
+// saves them to the screenshot directory. Called unconditionally so that even
+// successful runs leave a log trail for diagnosing silent-skip problems.
 func saveWorkflowRunDebugInfo(t *testing.T, env *e2eEnv, label string, run *forge.WorkflowRun) {
 	t.Helper()
 	ctx := context.Background()
 
 	runURL := fmt.Sprintf("https://github.com/%s/%s/actions/runs/%d", env.org, forge.ConfigRepoName, run.ID)
-	fmt.Fprintf(os.Stderr, "::warning::%s workflow run %d failed (conclusion: %s). Run URL: %s\n", label, run.ID, run.Conclusion, runURL)
+	annotation := "::notice::"
+	if run.Conclusion != "" && run.Conclusion != "success" {
+		annotation = "::warning::"
+	}
+	fmt.Fprintf(os.Stderr, "%s%s workflow run %d (conclusion: %s). Run URL: %s\n", annotation, label, run.ID, run.Conclusion, runURL)
 
 	debugDir := filepath.Join(env.screenshotDir, fmt.Sprintf("%s-run-%d", label, run.ID))
 	_ = os.MkdirAll(debugDir, 0o755)
@@ -439,7 +443,7 @@ func saveWorkflowRunDebugInfo(t *testing.T, env *e2eEnv, label string, run *forg
 		if writeErr := os.WriteFile(logPath, []byte(logs), 0o644); writeErr != nil {
 			t.Logf("Could not write logs to %s: %v", logPath, writeErr)
 		} else {
-			fmt.Fprintf(os.Stderr, "::warning file=%s::%s run %d workflow logs saved\n", logPath, label, run.ID)
+			fmt.Fprintf(os.Stderr, "%sfile=%s::%s run %d workflow logs saved\n", annotation, logPath, label, run.ID)
 		}
 		t.Logf("%s workflow run logs:\n%s", label, logs)
 	}
@@ -589,9 +593,9 @@ func runUnenrollmentTest(t *testing.T, env *e2eEnv) {
 		"admin", "disable", "repos", env.org, testRepo, "--yolo")
 	t.Logf("Disable repos output:\n%s", output)
 
-	// Find the most recent repo-maintenance run so we can capture debug info
-	// if it failed. The CLI already watched it to completion, so it should
-	// exist and be completed.
+	// Always capture the repo-maintenance run's logs. Even when the run
+	// succeeds, the logs reveal whether unenrollment was attempted or silently
+	// skipped (e.g. due to insufficient token scope).
 	var repoMaintRun *forge.WorkflowRun
 	runs, listErr := env.client.ListWorkflowRuns(ctx, env.org, forge.ConfigRepoName, "repo-maintenance.yml")
 	if listErr != nil {
@@ -600,9 +604,7 @@ func runUnenrollmentTest(t *testing.T, env *e2eEnv) {
 		r := runs[0]
 		repoMaintRun = &r
 		t.Logf("repo-maintenance run %d: status=%s conclusion=%s", r.ID, r.Status, r.Conclusion)
-		if r.Conclusion != "" && r.Conclusion != "success" {
-			saveWorkflowRunDebugInfo(t, env, "repo-maintenance", repoMaintRun)
-		}
+		saveWorkflowRunDebugInfo(t, env, "repo-maintenance", repoMaintRun)
 	}
 
 	// The CLI waited for repo-maintenance, so the removal PR should exist.
