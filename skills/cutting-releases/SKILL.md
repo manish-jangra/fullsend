@@ -72,7 +72,7 @@ git log --oneline <previous-tag>..HEAD
 ```
 
 Summarize the changes into categories (features, fixes, refactors). Exclude
-commits that start with `docs:`, `test:`, or `chore:` — GoReleaser filters
+commits that start with `docs:`, `test:`, `chore:`, `ci:`, or `build:` — GoReleaser filters
 these from the changelog anyway.
 
 ### 6. Create the annotated tag
