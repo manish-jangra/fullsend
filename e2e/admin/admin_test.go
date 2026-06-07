@@ -426,11 +426,15 @@ func saveWorkflowRunDebugInfo(t *testing.T, env *e2eEnv, label string, run *forg
 	ctx := context.Background()
 
 	runURL := fmt.Sprintf("https://github.com/%s/%s/actions/runs/%d", env.org, forge.ConfigRepoName, run.ID)
-	annotation := "::notice::"
+	// GitHub Actions annotation commands: "::notice::" for plain messages,
+	// "::notice " (no trailing ::) when followed by file= parameters.
+	annotationMsg := "::notice::"
+	annotationFile := "::notice "
 	if run.Conclusion != "" && run.Conclusion != "success" {
-		annotation = "::warning::"
+		annotationMsg = "::warning::"
+		annotationFile = "::warning "
 	}
-	fmt.Fprintf(os.Stderr, "%s%s workflow run %d (conclusion: %s). Run URL: %s\n", annotation, label, run.ID, run.Conclusion, runURL)
+	fmt.Fprintf(os.Stderr, "%s%s workflow run %d (conclusion: %s). Run URL: %s\n", annotationMsg, label, run.ID, run.Conclusion, runURL)
 
 	debugDir := filepath.Join(env.screenshotDir, fmt.Sprintf("%s-run-%d", label, run.ID))
 	_ = os.MkdirAll(debugDir, 0o755)
@@ -443,7 +447,7 @@ func saveWorkflowRunDebugInfo(t *testing.T, env *e2eEnv, label string, run *forg
 		if writeErr := os.WriteFile(logPath, []byte(logs), 0o644); writeErr != nil {
 			t.Logf("Could not write logs to %s: %v", logPath, writeErr)
 		} else {
-			fmt.Fprintf(os.Stderr, "%sfile=%s::%s run %d workflow logs saved\n", annotation, logPath, label, run.ID)
+			fmt.Fprintf(os.Stderr, "%sfile=%s::%s run %d workflow logs saved\n", annotationFile, logPath, label, run.ID)
 		}
 		t.Logf("%s workflow run logs:\n%s", label, logs)
 	}
