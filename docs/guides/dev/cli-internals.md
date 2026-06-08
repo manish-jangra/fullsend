@@ -39,6 +39,8 @@ fullsend
 │   ├── --no-post-script                     #   Skip post-script execution
 │   ├── --debug [filter]                     #   Enable Claude Code debug logging
 │   ├── --offline                            #   Reject network fetches
+│   ├── --max-depth <int>                    #   Max transitive dependency depth (0 disables)
+│   ├── --max-resources <int>                #   Max total remote resources per harness
 │   ├── --run-url <url>                      #   CI/CD run URL for status comments
 │   ├── --status-repo <owner/repo>           #   Repository for status comments
 │   ├── --status-number <int>                #   Issue/PR number for status comments
