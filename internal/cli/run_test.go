@@ -87,6 +87,55 @@ func TestRunCommand_HasOfflineFlag(t *testing.T) {
 	assert.Equal(t, "false", flag.DefValue)
 }
 
+func TestRunCommand_HasMaxDepthFlag(t *testing.T) {
+	cmd := newRunCmd()
+	flag := cmd.Flags().Lookup("max-depth")
+	require.NotNil(t, flag)
+	assert.Equal(t, "10", flag.DefValue)
+}
+
+func TestRunCommand_HasMaxResourcesFlag(t *testing.T) {
+	cmd := newRunCmd()
+	flag := cmd.Flags().Lookup("max-resources")
+	require.NotNil(t, flag)
+	assert.Equal(t, "50", flag.DefValue)
+}
+
+func TestRunCommand_AcceptsZeroMaxDepth(t *testing.T) {
+	cmd := newRunCmd()
+	cmd.SetArgs([]string{"test-agent", "--fullsend-dir", "/tmp", "--target-repo", "/tmp", "--max-depth", "0"})
+	err := cmd.Execute()
+	// --max-depth 0 is valid (disables transitive resolution); the error
+	// should come from the run flow, not flag validation.
+	if err != nil {
+		assert.NotContains(t, err.Error(), "--max-depth must be >= 0")
+	}
+}
+
+func TestRunCommand_RejectsNegativeMaxDepth(t *testing.T) {
+	cmd := newRunCmd()
+	cmd.SetArgs([]string{"test-agent", "--fullsend-dir", "/tmp", "--target-repo", "/tmp", "--max-depth", "-1"})
+	err := cmd.Execute()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "--max-depth must be >= 0")
+}
+
+func TestRunCommand_RejectsZeroMaxResources(t *testing.T) {
+	cmd := newRunCmd()
+	cmd.SetArgs([]string{"test-agent", "--fullsend-dir", "/tmp", "--target-repo", "/tmp", "--max-resources", "0"})
+	err := cmd.Execute()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "--max-resources must be >= 1")
+}
+
+func TestRunCommand_RejectsNegativeMaxResources(t *testing.T) {
+	cmd := newRunCmd()
+	cmd.SetArgs([]string{"test-agent", "--fullsend-dir", "/tmp", "--target-repo", "/tmp", "--max-resources", "-1"})
+	err := cmd.Execute()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "--max-resources must be >= 1")
+}
+
 func TestBuildScanContextCommand_SourcesEnv(t *testing.T) {
 	traceID := "aabbccdd-1122-4334-8556-aabbccddeeff"
 	cmd := buildScanContextCommand("/tmp/workspace/repo", traceID)

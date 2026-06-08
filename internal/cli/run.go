@@ -53,6 +53,13 @@ var agentWorkingDirExcludes = []string{
 	".fullsend-workspace/",
 }
 
+// resolveFlags groups CLI flags that control remote resource resolution.
+type resolveFlags struct {
+	offline      bool
+	maxDepth     int
+	maxResources int
+}
+
 // statusOpts holds the optional status notification parameters for a run.
 type statusOpts struct {
 	runURL      string
@@ -69,8 +76,8 @@ func newRunCmd() *cobra.Command {
 	var envFiles []string
 	var noPostScript bool
 	var debugFilter string
-	var offline bool
 	var keepSandbox bool
+	var rFlags resolveFlags
 	var sOpts statusOpts
 
 	cmd := &cobra.Command{
@@ -81,7 +88,7 @@ func newRunCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			agentName := args[0]
 			printer := ui.New(os.Stdout)
-			return runAgent(cmd.Context(), agentName, fullsendDir, outputBase, targetRepo, fullsendBinary, envFiles, noPostScript, debugFilter, offline, sOpts, printer, keepSandbox)
+			return runAgent(cmd.Context(), agentName, fullsendDir, outputBase, targetRepo, fullsendBinary, envFiles, noPostScript, debugFilter, rFlags, sOpts, printer, keepSandbox)
 		},
 	}
 
@@ -94,7 +101,9 @@ func newRunCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&keepSandbox, "keep-sandbox", false, "skip sandbox deletion after the run (useful for post-failure inspection)")
 	cmd.Flags().StringVar(&debugFilter, "debug", "", `enable Claude Code debug logging with optional category filter (e.g. "api,hooks")`)
 	cmd.Flags().Lookup("debug").NoOptDefVal = "*"
-	cmd.Flags().BoolVar(&offline, "offline", false, "reject network fetches; only use cached remote resources")
+	cmd.Flags().BoolVar(&rFlags.offline, "offline", false, "reject network fetches; only use cached remote resources")
+	cmd.Flags().IntVar(&rFlags.maxDepth, "max-depth", resolve.DefaultMaxDepth, "maximum dependency depth for transitive resolution (0 disables)")
+	cmd.Flags().IntVar(&rFlags.maxResources, "max-resources", resolve.DefaultMaxResources, "maximum total remote resources per harness")
 	cmd.Flags().StringVar(&sOpts.runURL, "run-url", "", "URL of the CI/CD run for status comments")
 	cmd.Flags().StringVar(&sOpts.statusRepo, "status-repo", "", "repository (owner/repo) for status comments")
 	cmd.Flags().IntVar(&sOpts.statusNum, "status-number", 0, "issue/PR number for status comments")
@@ -105,11 +114,18 @@ func newRunCmd() *cobra.Command {
 	return cmd
 }
 
-func runAgent(ctx context.Context, agentName, fullsendDir, outputBase, targetRepo, fullsendBinary string, envFiles []string, noPostScript bool, debug string, offline bool, sOpts statusOpts, printer *ui.Printer, keepSandbox bool) (runErr error) {
+func runAgent(ctx context.Context, agentName, fullsendDir, outputBase, targetRepo, fullsendBinary string, envFiles []string, noPostScript bool, debug string, rFlags resolveFlags, sOpts statusOpts, printer *ui.Printer, keepSandbox bool) (runErr error) {
 	printer.Banner(Version())
 	printer.Blank()
 	printer.Header("Running agent: " + agentName)
 	printer.Blank()
+
+	if rFlags.maxDepth < 0 {
+		return fmt.Errorf("--max-depth must be >= 0, got %d", rFlags.maxDepth)
+	}
+	if rFlags.maxResources < 1 {
+		return fmt.Errorf("--max-resources must be >= 1, got %d", rFlags.maxResources)
+	}
 
 	// 0. Load env files before anything else so vars are available for harness expansion.
 	for _, ef := range envFiles {
@@ -160,12 +176,14 @@ func runAgent(ctx context.Context, agentName, fullsendDir, outputBase, targetRep
 		}
 
 		policy := fetch.DefaultPolicy
-		policy.Offline = offline
+		policy.Offline = rFlags.offline
 
 		deps, err := resolve.ResolveHarness(ctx, h, resolve.ResolveOpts{
 			WorkspaceRoot: absFullsendDir,
 			FetchPolicy:   policy,
 			AuditLogPath:  filepath.Join(absFullsendDir, ".fullsend-cache", "fetch-audit.jsonl"),
+			MaxDepth:      rFlags.maxDepth,
+			MaxResources:  rFlags.maxResources,
 		})
 		if err != nil {
 			printer.StepFail("Remote resource resolution failed")

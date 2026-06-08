@@ -230,6 +230,18 @@ fullsend run code \
   --env-file fullsend-code.env
 ```
 
+### Remote resource flags
+
+When your harness references URL-based skills with transitive dependencies
+(see [ADR-0038](../../ADRs/0038-universal-harness-access.md)), you can tune
+resolution limits:
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--max-depth` | 10 | Maximum dependency depth for transitive resolution (0 disables) |
+| `--max-resources` | 50 | Maximum total remote resources fetched per harness |
+| `--offline` | false | Reject network fetches; only use cached remote resources |
+
 ### Status notification flags
 
 When running agents locally you can optionally enable status comments on the
