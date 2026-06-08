@@ -75,8 +75,29 @@ func sanitizeDownload(localDir string) error {
 			return filepath.SkipDir
 		}
 
+		// Remove AppleDouble (._*) files inside .git/ directories.
+		// These are created by macOS bsdtar when archiving files with
+		// extended attributes and corrupt git when extracted on Linux.
+		if !d.IsDir() && strings.HasPrefix(d.Name(), "._") && inGitDir(path, absLocal) {
+			return os.Remove(path)
+		}
+
 		return nil
 	})
+}
+
+// inGitDir reports whether path is inside a ".git" directory under root.
+func inGitDir(path, root string) bool {
+	rel, err := filepath.Rel(root, path)
+	if err != nil {
+		return false
+	}
+	for _, component := range strings.Split(filepath.Dir(rel), string(filepath.Separator)) {
+		if component == ".git" {
+			return true
+		}
+	}
+	return false
 }
 
 // EnsureProvider creates or updates a provider on the gateway. Credential
@@ -390,6 +411,11 @@ func UploadDir(sandboxName, localPath, remotePath string) error {
 	defer os.Remove(tmpPath)
 
 	tarCmd := exec.Command("tar", "-czf", tmpPath, "-C", localPath, ".")
+	// Suppress macOS AppleDouble (._*) files in the tarball. On macOS,
+	// bsdtar generates ._* companion files for any file with extended
+	// attributes. These corrupt .git after a sandbox round-trip.
+	// COPYFILE_DISABLE is a no-op on Linux.
+	tarCmd.Env = append(os.Environ(), "COPYFILE_DISABLE=1")
 	if out, tarErr := tarCmd.CombinedOutput(); tarErr != nil {
 		return fmt.Errorf("creating tarball of %q: %s: %w", localPath, string(out), tarErr)
 	}
