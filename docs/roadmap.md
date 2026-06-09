@@ -4,12 +4,12 @@ Where fullsend is, and where it is going. Organized as **Now / Next / Later** �
 
 ## Foundation (done)
 
-Fullsend reached MVP in April 2026 and scaled through May. The platform can be installed at the org level, enroll repositories, and run a full autonomous SDLC loop: triage issues, produce code and tests, review PRs, apply fixes from review feedback, and file retrospective improvement proposals. The core agent suite ships as **OOTB (out-of-the-box) agents** and is designed to be general, extensible, and replaceable.
+Fullsend reached MVP in April 2026 and scaled through May. The platform can be installed at the org level, enroll repositories, and run a full autonomous SDLC loop: triage issues, produce code and tests, review PRs, apply fixes from review feedback, and file retrospective improvement proposals. The core agent suite ships as **default agents** and is designed to be general, extensible, and replaceable.
 
 What this phase established:
 
 - **Sandboxed runner architecture** — agents execute in isolated environments with controlled access to forge credentials and repository content
-- **Default agent suite** — OOTB agents that enable an end-to-end bugfix workflow: triage, code, review, fix, and retro
+- **Default agent suite** — default agents that enable an end-to-end bugfix workflow: triage, code, review, fix, and retro
 - **Binary autonomy model** — per-repo opt-in, CODEOWNERS enforcing human approval on protected paths
 - **The repo is the coordinator** — branch protection, CODEOWNERS, and status checks replace a coordinator agent
 - **Trust derives from repository permissions, not agent identity**
@@ -24,7 +24,7 @@ What we are actively building and shipping.
 
 Teams use fullsend as a platform — plugging in their own agents, skills, and orchestration while inheriting the platform's security model, sandbox isolation, and coordination layer. At the same time, teams adopt fullsend incrementally — enabling only the capabilities they want without committing to the full workflow or extensive infrastructure setup.
 
-The BYOA interface needs to be clean enough that replatforming an existing agent is straightforward, not a rewrite. Prospective users are requesting simplified onboarding, selective agent enablement, and a clear authorization model that prevents non-maintainers from triggering agent workloads without team approval.
+The custom agent interface needs to be clean enough that replatforming an existing agent is straightforward, not a rewrite. Prospective users are requesting simplified onboarding, selective agent enablement, and a clear authorization model that prevents non-maintainers from triggering agent workloads without team approval.
 
 Examples of work that could move this forward:
 
