@@ -53,7 +53,7 @@ Examples of work that could move this forward:
 
 ### Agent capabilities
 
-Improving what agents can do and the runtime they operate in. This covers cross-repo workflows, better context provisioning, onboarding reliability, runtime enhancements, and ongoing improvements to individual agents. Partnering with the OpenShell team to advance the agentic SDLC is part of this work.
+Improving what agents can do and the runtime they operate in. This covers cross-repo workflows, better context provisioning, onboarding reliability, runtime enhancements, and ongoing improvements to individual agents. Partnering with the OpenShell team to advance their agentic SDLC is part of this work.
 
 Examples of work that could move this forward:
 
