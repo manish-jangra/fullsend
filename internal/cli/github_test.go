@@ -55,6 +55,7 @@ func TestGitHubSetupCmd_Flags(t *testing.T) {
 
 	mintURLFlag := cmd.Flags().Lookup("mint-url")
 	require.NotNil(t, mintURLFlag, "expected --mint-url flag")
+	assert.Equal(t, DefaultMintURL, mintURLFlag.DefValue)
 
 	agentsFlag := cmd.Flags().Lookup("agents")
 	require.NotNil(t, agentsFlag, "expected --agents flag")
@@ -93,13 +94,19 @@ func TestGitHubSetupCmd_Flags(t *testing.T) {
 	require.NotNil(t, inferenceWIFFlag, "expected --inference-wif-provider flag")
 }
 
-func TestGitHubSetupCmd_RequiresMintURL(t *testing.T) {
+func TestGitHubSetupCmd_UsesDefaultMintURL(t *testing.T) {
 	t.Setenv("GH_TOKEN", "test-token")
 	cmd := newRootCmd()
-	cmd.SetArgs([]string{"github", "setup", "acme"})
+	// Without explicit --mint-url, the default should be used and
+	// validation should not fail on a missing URL. The command will
+	// fail later (listing repos), but not with a "mint-url is required" error.
+	cmd.SetArgs([]string{"github", "setup", "acme",
+		"--enroll-none"})
 	err := cmd.Execute()
+	// The error should be from a downstream step (e.g. listing repos),
+	// not from missing --mint-url.
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "--mint-url is required")
+	assert.NotContains(t, err.Error(), "--mint-url is required")
 }
 
 func TestGitHubSetupCmd_PerRepoRejectsPerOrgFlags(t *testing.T) {
@@ -496,12 +503,12 @@ func TestRunGitHubSetupPerRepo(t *testing.T) {
 	printer := ui.New(&discardWriter{})
 
 	err := runGitHubSetupPerRepo(context.Background(), client, printer, githubSetupConfig{
-		target:              "acme/widget",
-		mintURL:             "https://mint-test-abc123.run.app",
-		inferenceProject:    "my-project",
+		target:               "acme/widget",
+		mintURL:              "https://mint-test-abc123.run.app",
+		inferenceProject:     "my-project",
 		inferenceWIFProvider: "projects/123456789/locations/global/workloadIdentityPools/fullsend-pool/providers/github-oidc",
-		inferenceRegion:     "global",
-		agents:              strings.Join(config.PerRepoDefaultRoles(), ","),
+		inferenceRegion:      "global",
+		agents:               strings.Join(config.PerRepoDefaultRoles(), ","),
 	})
 	require.NoError(t, err)
 
@@ -599,13 +606,13 @@ func TestRunGitHubSetupPerRepo_DryRun(t *testing.T) {
 	printer := ui.New(&discardWriter{})
 
 	err := runGitHubSetupPerRepo(context.Background(), client, printer, githubSetupConfig{
-		target:              "acme/widget",
-		mintURL:             "https://mint-test-abc123.run.app",
-		inferenceProject:    "my-project",
+		target:               "acme/widget",
+		mintURL:              "https://mint-test-abc123.run.app",
+		inferenceProject:     "my-project",
 		inferenceWIFProvider: "projects/123456789/locations/global/workloadIdentityPools/fullsend-pool/providers/github-oidc",
-		inferenceRegion:     "global",
-		agents:              strings.Join(config.PerRepoDefaultRoles(), ","),
-		dryRun:              true,
+		inferenceRegion:      "global",
+		agents:               strings.Join(config.PerRepoDefaultRoles(), ","),
+		dryRun:               true,
 	})
 	require.NoError(t, err)
 
@@ -662,11 +669,11 @@ func TestRunGitHubSetupPerRepo_PartialReuse_ProjectOnly(t *testing.T) {
 	printer := ui.New(&discardWriter{})
 
 	err := runGitHubSetupPerRepo(context.Background(), client, printer, githubSetupConfig{
-		target:              "acme/widget",
-		mintURL:             "https://mint-test-abc123.run.app",
-		inferenceRegion:     "global",
+		target:               "acme/widget",
+		mintURL:              "https://mint-test-abc123.run.app",
+		inferenceRegion:      "global",
 		inferenceWIFProvider: "projects/123456789/locations/global/workloadIdentityPools/fullsend-pool/providers/github-oidc",
-		agents:              strings.Join(config.PerRepoDefaultRoles(), ","),
+		agents:               strings.Join(config.PerRepoDefaultRoles(), ","),
 	})
 	require.NoError(t, err)
 

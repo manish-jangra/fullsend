@@ -98,6 +98,7 @@ func TestInstallCmd_Flags(t *testing.T) {
 
 	mintURLFlag := cmd.Flags().Lookup("mint-url")
 	require.NotNil(t, mintURLFlag, "expected --mint-url flag")
+	assert.Equal(t, DefaultMintURL, mintURLFlag.DefValue)
 
 	// --gcp-auth-mode removed (WIF is the only mode)
 	gcpAuthModeFlag := cmd.Flags().Lookup("gcp-auth-mode")
@@ -129,12 +130,23 @@ func TestInstallCmd_InvalidAppSet(t *testing.T) {
 	assert.Contains(t, err.Error(), "invalid --app-set")
 }
 
-func TestInstallCmd_PerRepoRequiresMintProject(t *testing.T) {
+func TestInstallCmd_PerRepoRequiresMintProjectWithoutDefaultURL(t *testing.T) {
 	cmd := newRootCmd()
-	cmd.SetArgs([]string{"admin", "install", "acme/widget"})
+	// When --mint-url is explicitly cleared, --mint-project is required.
+	cmd.SetArgs([]string{"admin", "install", "acme/widget", "--mint-url", ""})
 	err := cmd.Execute()
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "--mint-project")
+}
+
+func TestInstallCmd_PerRepoDefaultMintURLSkipsMintProject(t *testing.T) {
+	cmd := newRootCmd()
+	// With the default mint URL, --mint-project is not required.
+	// The error should be about --inference-project, not --mint-project.
+	cmd.SetArgs([]string{"admin", "install", "acme/widget"})
+	err := cmd.Execute()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "--inference-project is required for per-repo installation")
 }
 
 func TestInstallCmd_PerRepoRequiresInferenceProject(t *testing.T) {
@@ -1394,9 +1406,25 @@ func TestResolveSharedRoleAppIDs_SameOrgUsesOwnEntry(t *testing.T) {
 	assert.Equal(t, "100", result["acme-corp/coder"])
 }
 
-func TestInstallCmd_SkipMintCheckRequiresMintURL(t *testing.T) {
+func TestInstallCmd_SkipMintCheckUsesDefaultMintURL(t *testing.T) {
+	t.Setenv("GH_TOKEN", "test-token")
 	cmd := newRootCmd()
-	cmd.SetArgs([]string{"admin", "install", "acme/widget", "--skip-mint-check", "--inference-project", "my-project"})
+	cmd.SetArgs([]string{"admin", "install", "acme/widget",
+		"--skip-mint-check",
+		"--inference-project", "my-project",
+		"--dry-run"})
+	err := cmd.Execute()
+	// With the default mint URL, --skip-mint-check no longer errors
+	// when --mint-url is not explicitly provided.
+	require.NoError(t, err)
+}
+
+func TestInstallCmd_SkipMintCheckRejectsEmptyMintURL(t *testing.T) {
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"admin", "install", "acme/widget",
+		"--skip-mint-check",
+		"--mint-url", "",
+		"--inference-project", "my-project"})
 	err := cmd.Execute()
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "--mint-url is required when using --skip-mint-check")
@@ -1433,11 +1461,27 @@ func TestInstallCmd_SkipMintCheckSkipsMintProject(t *testing.T) {
 	require.NoError(t, err2)
 }
 
-func TestInstallCmd_SkipMintCheckPerOrgRequiresMintURL(t *testing.T) {
+func TestInstallCmd_SkipMintCheckPerOrgUsesDefaultMintURL(t *testing.T) {
+	t.Setenv("GH_TOKEN", "test-token")
+	cmd := newRootCmd()
+	// With default mint URL, --skip-mint-check succeeds without explicit --mint-url.
+	// The command may fail downstream (e.g. listing repos), but should not
+	// error on missing --mint-url.
+	cmd.SetArgs([]string{"admin", "install", "acme",
+		"--skip-mint-check",
+		"--enroll-none"})
+	err := cmd.Execute()
+	if err != nil {
+		assert.NotContains(t, err.Error(), "--mint-url is required when using --skip-mint-check")
+	}
+}
+
+func TestInstallCmd_SkipMintCheckPerOrgRejectsEmptyMintURL(t *testing.T) {
 	t.Setenv("GH_TOKEN", "test-token")
 	cmd := newRootCmd()
 	cmd.SetArgs([]string{"admin", "install", "acme",
-		"--skip-mint-check"})
+		"--skip-mint-check",
+		"--mint-url", ""})
 	err := cmd.Execute()
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "--mint-url is required when using --skip-mint-check")

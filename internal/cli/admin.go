@@ -32,6 +32,11 @@ import (
 	"github.com/fullsend-ai/fullsend/internal/ui"
 )
 
+// DefaultMintURL is the hosted public mint URL used when --mint-url is not
+// explicitly provided. Users who self-host a mint can override this via
+// the --mint-url flag.
+const DefaultMintURL = "https://fullsend-mint-gljhbkcloq-uc.a.run.app"
+
 func newAdminCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "admin",
@@ -550,7 +555,7 @@ Inference authentication:
 	cmd.Flags().BoolVar(&publicApps, "public", false, "create public (unlisted) GitHub Apps installable by other orgs")
 	cmd.Flags().StringVar(&appSet, "app-set", appsetup.DefaultAppSet, "app set name prefix for GitHub Apps (e.g., myorg creates myorg-fullsend, myorg-coder)")
 	// Shared flags.
-	cmd.Flags().StringVar(&mintURL, "mint-url", "", "token mint URL for OIDC token exchange")
+	cmd.Flags().StringVar(&mintURL, "mint-url", DefaultMintURL, "token mint URL for OIDC token exchange (default: hosted public mint)")
 
 	return cmd
 }

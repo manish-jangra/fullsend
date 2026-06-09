@@ -48,21 +48,20 @@ func parseTarget(target string) (string, string, bool) {
 
 // githubSetupConfig holds configuration for the github setup command.
 type githubSetupConfig struct {
-	target              string
-	mintURL             string
-	agents              string
-	inferenceProject    string
-	inferenceRegion     string
+	target               string
+	mintURL              string
+	agents               string
+	inferenceProject     string
+	inferenceRegion      string
 	inferenceWIFProvider string
-	skipAppSetup        bool
-	publicApps          bool
-	appSet              string
-	enrollAll           bool
-	enrollNone          bool
-	vendorBinary        bool
-	dryRun              bool
+	skipAppSetup         bool
+	publicApps           bool
+	appSet               string
+	enrollAll            bool
+	enrollNone           bool
+	vendorBinary         bool
+	dryRun               bool
 }
-
 
 func newGitHubSetupCmd() *cobra.Command {
 	var cfg githubSetupConfig
@@ -91,9 +90,6 @@ values (mint URL, WIF provider, project ID) are provided as flags.`,
 				return fmt.Errorf("invalid --app-set: %w", err)
 			}
 
-			if cfg.mintURL == "" {
-				return fmt.Errorf("--mint-url is required for github setup")
-			}
 			if err := validateMintURLHTTPS(cfg.mintURL); err != nil {
 				return err
 			}
@@ -126,7 +122,7 @@ values (mint URL, WIF provider, project ID) are provided as flags.`,
 		},
 	}
 
-	cmd.Flags().StringVar(&cfg.mintURL, "mint-url", "", "token mint URL (required)")
+	cmd.Flags().StringVar(&cfg.mintURL, "mint-url", DefaultMintURL, "token mint URL (default: hosted public mint)")
 	cmd.Flags().StringVar(&cfg.agents, "agents", strings.Join(config.DefaultAgentRoles(), ","), "comma-separated agent roles")
 	cmd.Flags().StringVar(&cfg.inferenceProject, "inference-project", "", "GCP project ID for inference")
 	cmd.Flags().StringVar(&cfg.inferenceRegion, "inference-region", "global", "GCP region for inference")
