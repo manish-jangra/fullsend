@@ -25,12 +25,12 @@ plugins:
 
 host_files:
   - src: env/gcp-vertex.env
-    dest: /tmp/workspace/.env.d/gcp-vertex.env
+    dest: /sandbox/workspace/.env.d/gcp-vertex.env
     expand: true
   - src: ${GOOGLE_APPLICATION_CREDENTIALS}
-    dest: /tmp/workspace/.gcp-credentials.json
+    dest: /tmp/.gcp-credentials.json
   - src: ${GCP_OIDC_TOKEN_FILE}
-    dest: /tmp/workspace/.gcp-oidc-token
+    dest: /sandbox/workspace/.gcp-oidc-token
     optional: true
 
 pre_script: scripts/pre-code.sh
@@ -200,10 +200,10 @@ Each agent role has its own identity, permissions, and purpose:
 │  App naming: {org}-{role}                                   │
 │  Bot naming: {org}-{role}[bot]                              │
 │  PEM storage: GCP Secret Manager                            │
-│  Secret name: fullsend-{org}--{role}-app-pem                │
+│  Secret name: fullsend-{role}-app-pem                       │
 │                                                             │
-│  Note: "fix" role reuses the "coder" app — no separate      │
-│  GitHub App is created for it.                               │
+│  Note: "fix" role reuses the "coder" app and PEM — no       │
+│  separate GitHub App or secret is created for it.          │
 │                                                             │
 └─────────────────────────────────────────────────────────────┘
 ```
@@ -259,12 +259,12 @@ plugins:
 
 host_files:
   - src: env/gcp-vertex.env
-    dest: /tmp/workspace/.env.d/gcp-vertex.env
+    dest: /sandbox/workspace/.env.d/gcp-vertex.env
     expand: true
   - src: ${GOOGLE_APPLICATION_CREDENTIALS}
-    dest: /tmp/workspace/.gcp-credentials.json
+    dest: /tmp/.gcp-credentials.json
   - src: ${GCP_OIDC_TOKEN_FILE}
-    dest: /tmp/workspace/.gcp-oidc-token
+    dest: /sandbox/workspace/.gcp-oidc-token
     optional: true
 
 pre_script: scripts/pre-code.sh

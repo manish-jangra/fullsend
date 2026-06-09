@@ -21,8 +21,8 @@ func TestEnsureAvailable_OpenshellNotInPath(t *testing.T) {
 }
 
 func TestConstants(t *testing.T) {
-	assert.Equal(t, "/tmp/workspace", SandboxWorkspace)
-	assert.Equal(t, "/tmp/claude-config", SandboxClaudeConfig)
+	assert.Equal(t, "/sandbox/workspace", SandboxWorkspace)
+	assert.Equal(t, "/sandbox/claude-config", SandboxClaudeConfig)
 }
 
 func TestBuildProviderArgs_BareKeyCredentials(t *testing.T) {
@@ -378,10 +378,90 @@ func TestEffectiveReadyTimeout_EnvVarCappedAtMax(t *testing.T) {
 	assert.Equal(t, maxReadyTimeout, got)
 }
 
+func TestUploadFile_OpenshellNotInPath(t *testing.T) {
+	tmp := t.TempDir()
+	f := filepath.Join(tmp, "test.txt")
+	require.NoError(t, os.WriteFile(f, []byte("hello"), 0o644))
+
+	t.Setenv("PATH", "")
+
+	err := UploadFile("test-sandbox", f, "/sandbox/workspace/test.txt")
+	assert.Error(t, err)
+}
+
 func TestUploadDir_OpenshellNotInPath(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("PATH", "")
 
-	err := UploadDir("test-sandbox", dir, "/tmp/workspace/repo")
+	err := UploadDir("test-sandbox", dir, "/sandbox/workspace/repo")
 	assert.Error(t, err)
+}
+
+func TestUploadDir_TarIncludesCopyfileDisable(t *testing.T) {
+	// Create a temp dir with a file, run UploadDir (which will fail because
+	// openshell is unavailable), but first intercept the tar step by providing
+	// a tar wrapper that records its environment.
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "file.txt"), []byte("content"), 0o644))
+
+	// Create a fake tar that writes its COPYFILE_DISABLE env var to a file.
+	binDir := t.TempDir()
+	envFile := filepath.Join(binDir, "copyfile_env")
+	fakeTar := filepath.Join(binDir, "tar")
+	script := "#!/bin/sh\necho \"$COPYFILE_DISABLE\" > " + envFile + "\n"
+	require.NoError(t, os.WriteFile(fakeTar, []byte(script), 0o755))
+
+	t.Setenv("PATH", binDir)
+	// Will fail at the Upload step (no openshell), but tar runs first.
+	_ = UploadDir("test-sandbox", dir, "/tmp/workspace/repo")
+
+	data, err := os.ReadFile(envFile)
+	require.NoError(t, err, "fake tar should have written env file")
+	assert.Equal(t, "1", strings.TrimSpace(string(data)), "COPYFILE_DISABLE should be set to 1")
+}
+
+func TestSanitizeDownload_RemovesAppleDoubleInGitDir(t *testing.T) {
+	dir := t.TempDir()
+
+	// Create .git/objects/pack/ with a normal file and an AppleDouble file.
+	packDir := filepath.Join(dir, ".git", "objects", "pack")
+	require.NoError(t, os.MkdirAll(packDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(packDir, "pack-abc.idx"), []byte("idx"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(packDir, "._pack-abc.idx"), []byte("apple"), 0o644))
+
+	// Create an AppleDouble file outside .git/ — should NOT be removed.
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "._regular.txt"), []byte("ok"), 0o644))
+
+	err := sanitizeDownload(dir)
+	require.NoError(t, err)
+
+	// Normal pack file survives.
+	_, err = os.Stat(filepath.Join(packDir, "pack-abc.idx"))
+	assert.NoError(t, err, "normal pack file should survive")
+
+	// AppleDouble file inside .git/ should be removed.
+	_, err = os.Stat(filepath.Join(packDir, "._pack-abc.idx"))
+	assert.True(t, os.IsNotExist(err), "._* file inside .git/ should be removed")
+
+	// AppleDouble file outside .git/ should survive.
+	_, err = os.Stat(filepath.Join(dir, "._regular.txt"))
+	assert.NoError(t, err, "._* file outside .git/ should survive")
+}
+
+func TestInGitDir(t *testing.T) {
+	root := "/repo"
+	tests := []struct {
+		path string
+		want bool
+	}{
+		{"/repo/.git/objects/pack/file.idx", true},
+		{"/repo/.git/config", true},
+		{"/repo/sub/.git/hooks/pre-commit", true},
+		{"/repo/src/main.go", false},
+		{"/repo/._file.txt", false},
+	}
+	for _, tt := range tests {
+		got := inGitDir(tt.path, root)
+		assert.Equal(t, tt.want, got, "inGitDir(%q, %q)", tt.path, root)
+	}
 }

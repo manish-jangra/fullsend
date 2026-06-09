@@ -149,45 +149,6 @@ runs:
       shell: bash
       run: fullsend --version
 
-    - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
-
-    - name: Set OpenShell version
-      shell: bash
-      run: echo "OPENSHELL_VERSION=0.0.38" >> "${GITHUB_ENV}"
-
-    - name: Install OpenShell CLI
-      shell: bash
-      run: |
-        uv tool install openshell==${OPENSHELL_VERSION}
-        openshell --version
-
-    - name: Download openshell-gateway
-      shell: bash
-      run: |
-        set -euo pipefail
-
-        arch="$(uname -m)"
-        case "${arch}" in
-          x86_64) ;;
-          aarch64|arm64) arch=aarch64 ;;
-          *) echo "::error::Unsupported architecture for openshell-gateway: ${arch}"; exit 1 ;;
-        esac
-
-        GATEWAY_ASSET="openshell-gateway-${arch}-unknown-linux-gnu.tar.gz"
-        GATEWAY_URL="https://github.com/NVIDIA/OpenShell/releases/download/v${OPENSHELL_VERSION}/${GATEWAY_ASSET}"
-        max_attempts=3; attempt=1; delay=5
-        while true; do
-          if curl -fsSL "${GATEWAY_URL}" -o "/tmp/${GATEWAY_ASSET}"; then break; fi
-          if (( attempt >= max_attempts )); then
-            echo "::error::Gateway download failed after ${max_attempts} attempts"
-            exit 1
-          fi
-          echo "::warning::Gateway download attempt ${attempt}/${max_attempts} failed, retrying in ${delay}s..."
-          sleep "${delay}"; (( attempt++ )); (( delay *= 3 ))
-        done
-        tar xzf "/tmp/${GATEWAY_ASSET}" -C "${RUNNER_TEMP}/fullsend"
-        rm -f "/tmp/${GATEWAY_ASSET}"
-
     - name: Install Podman
       shell: bash
       run: |
@@ -203,58 +164,25 @@ runs:
         grep -q "^${whoami_user}:" /etc/subuid || sudo usermod --add-subuids 100000-165535 --add-subgids 100000-165535 "${whoami_user}"
         podman system migrate
         podman info
+        systemctl --user start podman.socket
 
-    - name: Start Podman API service
+    - name: Set OpenShell version
       shell: bash
       run: |
-        SOCKET_PATH="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/podman/podman.sock"
-        if [ ! -S "${SOCKET_PATH}" ]; then
-          mkdir -p "$(dirname "${SOCKET_PATH}")"
-          podman system service --time=0 "unix://${SOCKET_PATH}" &
-          for i in $(seq 1 30); do
-            [ -S "${SOCKET_PATH}" ] && podman --url "unix://${SOCKET_PATH}" info >/dev/null 2>&1 && break
-            sleep 1
-          done
-          [ -S "${SOCKET_PATH}" ] || { echo "::error::Podman socket not ready"; exit 1; }
-        fi
-        echo "Podman API service ready at ${SOCKET_PATH}"
+        echo "OPENSHELL_VERSION=0.0.54" >> "${GITHUB_ENV}"
+        # SHA corresponding to 0.0.54
+        echo "OPENSHELL_SHA=79aa355dd008e496a7d8f97b361a7b2866066fbc" >> "${GITHUB_ENV}"
 
-    - name: Start openshell-gateway
+    - name: Install OpenShell CLI
       shell: bash
       run: |
-        set -euo pipefail
+        mkdir -p $HOME/.config/openshell/
+        cat > $HOME/.config/openshell/gateway.env << EOF
+        OPENSHELL_BIND_ADDRESS=0.0.0.0
+        EOF
 
-        GATEWAY_LOG="${GITHUB_WORKSPACE}/output/openshell-gateway.log"
-        mkdir -p "${GITHUB_WORKSPACE}/output"
-
-        export OPENSHELL_SSH_HANDSHAKE_SECRET="ci-$(openssl rand -hex 16)"
-        echo "::add-mask::${OPENSHELL_SSH_HANDSHAKE_SECRET}"
-        # Version-tagged images start at 0.0.41; for 0.0.38 use the release commit SHA.
-        # TODO: pass via --podman-supervisor-image flag when one exists (Docker driver has --docker-supervisor-image).
-        export OPENSHELL_SUPERVISOR_IMAGE="ghcr.io/nvidia/openshell/supervisor:dfd47683e7da4f1a4a8fa5d77f92d3696e6a41f9"
-
-        "${RUNNER_TEMP}/fullsend/openshell-gateway" \
-          --bind-address 0.0.0.0 \
-          --health-port 8081 \
-          --drivers podman \
-          --disable-tls \
-          --db-url "sqlite:/tmp/gateway.db?mode=rwc" \
-          >"${GATEWAY_LOG}" 2>&1 &
-
-        for i in $(seq 1 30); do
-          curl -sf http://127.0.0.1:8081/healthz >/dev/null 2>&1 && break
-          sleep 2
-        done
-        curl -sf http://127.0.0.1:8081/healthz >/dev/null 2>&1 || {
-          echo "::error::Gateway health check failed after 60s"
-          echo "::group::Gateway logs"
-          cat "${GATEWAY_LOG}" 2>/dev/null || echo "(no log file)"
-          echo "::endgroup::"
-          exit 1
-        }
-
-        openshell gateway add http://127.0.0.1:8080 --local --name local
-        openshell gateway select local
+        curl -LsSf https://raw.githubusercontent.com/NVIDIA/OpenShell/${OPENSHELL_SHA}/install.sh | OPENSHELL_VERSION=v${OPENSHELL_VERSION} sh
+        openshell --version
 
     - name: Pre-pull sandbox image
       shell: bash

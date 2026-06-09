@@ -11,7 +11,7 @@ Linux are supported with Podman as the container runtime.
 | Requirement | macOS | Linux |
 |-------------|-------|-------|
 | Container runtime | Podman Desktop with a running machine | Podman |
-| [OpenShell](https://github.com/NVIDIA/OpenShell) | 0.0.38 | 0.0.38 |
+| [OpenShell](https://github.com/NVIDIA/OpenShell) | 0.0.54 | 0.0.54 |
 | GCP project | [Agent Platform API](https://console.cloud.google.com/apis/library/aiplatform.googleapis.com) enabled with [Claude models](https://console.cloud.google.com/vertex-ai/model-garden) enabled | Same |
 | GCP credentials | Service account key (see section below) | Same |
 | GitHub PAT | Classic PAT with `repo` scope (see section below) | Same |
@@ -48,23 +48,12 @@ fullsend --version
 
 [OpenShell](https://github.com/NVIDIA/OpenShell) provides the sandbox runtime. There are multiple ways
 to install it, here we use one similar to how we download it on Fullsend. Use the same version
-printed on your Fullsend workflow for better reproducibility. Install the CLI and download
-the gateway binary:
+printed on your Fullsend workflow for better reproducibility.
 
 ```bash
-# Install the CLI (requires uv — https://docs.astral.sh/uv/)
-uv tool install openshell==0.0.38
-
+export OPENSHELL_VERSION=0.0.54
+curl -LsSf https://raw.githubusercontent.com/NVIDIA/OpenShell/v${OPENSHELL_VERSION}/install.sh | OPENSHELL_VERSION=v${OPENSHELL_VERSION} sh
 openshell --version
-```
-
-Download the gateway binary from the [OpenShell releases](https://github.com/NVIDIA/OpenShell/releases/tag/v0.0.38) page. Pick the archive matching your platform and extract it:
-
-```bash
-# Example for macOS (Apple Silicon)
-curl -fsSL https://github.com/NVIDIA/OpenShell/releases/download/v0.0.38/openshell-gateway-aarch64-apple-darwin.tar.gz \
-  -o /tmp/openshell-gateway.tar.gz
-tar xzf /tmp/openshell-gateway.tar.gz -C $HOME/.local/bin/
 ```
 
 ## Get Google Cloud Platform credentials
@@ -122,47 +111,13 @@ clone Fullsend's repository. To learn more about custom agents visit
 git clone --depth 1 https://github.com/fullsend-ai/fullsend.git /tmp/fullsend-ai_fullsend/
 ```
 
-## Start the OpenShell gateway
-
-OpenShell requires a gateway to work, start one on a different terminal using Podman:
-
-```bash
-# On arm64 hosts (Apple Silicon, Graviton), uncomment these lines:
-# export FULLSEND_SANDBOX_IMAGE=ghcr.io/fullsend-ai/fullsend-sandbox:dev
-# podman machine start
-
-export OPENSHELL_SSH_HANDSHAKE_SECRET="local-$(openssl rand -hex 16)"
-# v0.0.38 requires an explicit supervisor image (version-tagged images start at 0.0.41)
-export OPENSHELL_SUPERVISOR_IMAGE="ghcr.io/nvidia/openshell/supervisor:dfd47683e7da4f1a4a8fa5d77f92d3696e6a41f9"
-
-openshell-gateway \
-  --bind-address 0.0.0.0 \
-  --health-port 8081 \
-  --drivers podman \
-  --disable-tls \
-  --db-url "sqlite:/tmp/gateway.db?mode=rwc"
-```
-
-Wait for the health check to pass, then register the gateway:
-
-```bash
-# Health endpoint is on port 8081, API on port 8080
-for i in $(seq 1 15); do
-  curl -sf http://127.0.0.1:8081/healthz >/dev/null 2>&1 && break
-  sleep 2
-done
-
-# Register and select the local gateway
-openshell gateway add http://127.0.0.1:8080 --local --name local
-openshell gateway select local
-```
-
 ## Run default agents
 
 Depending on the agent you want to run you need a different set of environment variables.
 Check the variables they need in their environment files, referenced in their harness files.
 
-**Tip**: use `--no-post-script` in the `fullsend run` calls to avoid side-effects.
+**Tip**: use `--no-post-script` in the `fullsend run` calls to avoid side-effects. You
+can also use `--keep-sandbox` to debug failures (but remember to remove them).
 
 **Note**: to run custom agents set `--fullsend-dir` to the directory where your
 custom agent definitions exist.
@@ -229,6 +184,18 @@ fullsend run code \
   --env-file fullsend-gcp.env \
   --env-file fullsend-code.env
 ```
+
+### Remote resource flags
+
+When your harness references URL-based skills with transitive dependencies
+(see [ADR-0038](../../ADRs/0038-universal-harness-access.md)), you can tune
+resolution limits:
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--max-depth` | 10 | Maximum dependency depth for transitive resolution (0 disables) |
+| `--max-resources` | 50 | Maximum total remote resources fetched per harness |
+| `--offline` | false | Reject network fetches; only use cached remote resources |
 
 ### Status notification flags
 
@@ -300,6 +267,10 @@ When you execute `fullsend run`, pass `--fullsend-dir` as `/tmp/agents/`.
 ### Linux
 
 - **Rootless Podman**: Podman runs rootless by default. Ensure your user has subuids/subgids configured (`grep $USER /etc/subuid`). If not, run `sudo usermod --add-subuids 100000-165535 --add-subgids 100000-165535 $USER && podman system migrate`.
+- **Gateway connectivity**: The sandbox does not move to Ready state and its logs say that it can't connect
+to the server (gateway). It is likely that you need to bind the gateway to `0.0.0.0`. Add
+`OPENSHELL_BIND_ADDRESS` on `$HOME/.config/openshell/gateway.env` and restart the
+`openshell-gateway` service.
 - **SELinux**: on Fedora/RHEL, bind-mounted volumes may need the `:z` suffix for standalone `podman run`. OpenShell handles this automatically.
 
 ## Troubleshooting
@@ -310,8 +281,8 @@ When you execute `fullsend run`, pass `--fullsend-dir` as `/tmp/agents/`.
 - Verify the gateway is running: `openshell gateway list`
 
 **`Gateway not running` or `no openshell gateway running`**
-- Start the gateway as described in step 5
-- Verify it's healthy: `curl -sf http://127.0.0.1:8081/healthz`
+- Check the `openshell-gateway` service.
+- Verify it's healthy: `curl -sf https://127.0.0.1:8081/healthz`
 - Check that it's registered: `openshell gateway list`
 
 **`Syntax error: "(" unexpected` inside sandbox**
@@ -324,7 +295,7 @@ When you execute `fullsend run`, pass `--fullsend-dir` as `/tmp/agents/`.
 - The default `:latest` tag is amd64-only. Add `FULLSEND_SANDBOX_IMAGE=ghcr.io/fullsend-ai/fullsend-sandbox:dev` to your env file
 
 **`L7 policy validation failed: unknown protocol 'tcp'`**
-- OpenShell 0.0.38 uses `protocol: rest` (not `tcp`) and `access: read-write`/`read-only` (not `allow`). Update your policy YAML files to use the new schema. See the built-in policies in `policies/` for examples.
+- OpenShell 0.0.54 uses `protocol: rest` (not `tcp`) and `access: read-write`/`read-only` (not `allow`). Update your policy YAML files to use the new schema. See the built-in policies in `policies/` for examples.
 
 **`unable to replace "host-gateway"` on macOS**
 - Set `host_containers_internal_ip = "192.168.127.254"` under `[containers]` in `~/.config/containers/containers.conf` and restart the Podman machine

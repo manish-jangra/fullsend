@@ -87,10 +87,59 @@ func TestRunCommand_HasOfflineFlag(t *testing.T) {
 	assert.Equal(t, "false", flag.DefValue)
 }
 
+func TestRunCommand_HasMaxDepthFlag(t *testing.T) {
+	cmd := newRunCmd()
+	flag := cmd.Flags().Lookup("max-depth")
+	require.NotNil(t, flag)
+	assert.Equal(t, "10", flag.DefValue)
+}
+
+func TestRunCommand_HasMaxResourcesFlag(t *testing.T) {
+	cmd := newRunCmd()
+	flag := cmd.Flags().Lookup("max-resources")
+	require.NotNil(t, flag)
+	assert.Equal(t, "50", flag.DefValue)
+}
+
+func TestRunCommand_AcceptsZeroMaxDepth(t *testing.T) {
+	cmd := newRunCmd()
+	cmd.SetArgs([]string{"test-agent", "--fullsend-dir", "/tmp", "--target-repo", "/tmp", "--max-depth", "0"})
+	err := cmd.Execute()
+	// --max-depth 0 is valid (disables transitive resolution); the error
+	// should come from the run flow, not flag validation.
+	if err != nil {
+		assert.NotContains(t, err.Error(), "--max-depth must be >= 0")
+	}
+}
+
+func TestRunCommand_RejectsNegativeMaxDepth(t *testing.T) {
+	cmd := newRunCmd()
+	cmd.SetArgs([]string{"test-agent", "--fullsend-dir", "/tmp", "--target-repo", "/tmp", "--max-depth", "-1"})
+	err := cmd.Execute()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "--max-depth must be >= 0")
+}
+
+func TestRunCommand_RejectsZeroMaxResources(t *testing.T) {
+	cmd := newRunCmd()
+	cmd.SetArgs([]string{"test-agent", "--fullsend-dir", "/tmp", "--target-repo", "/tmp", "--max-resources", "0"})
+	err := cmd.Execute()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "--max-resources must be >= 1")
+}
+
+func TestRunCommand_RejectsNegativeMaxResources(t *testing.T) {
+	cmd := newRunCmd()
+	cmd.SetArgs([]string{"test-agent", "--fullsend-dir", "/tmp", "--target-repo", "/tmp", "--max-resources", "-1"})
+	err := cmd.Execute()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "--max-resources must be >= 1")
+}
+
 func TestBuildScanContextCommand_SourcesEnv(t *testing.T) {
 	traceID := "aabbccdd-1122-4334-8556-aabbccddeeff"
-	cmd := buildScanContextCommand("/tmp/workspace/repo", traceID)
-	assert.Contains(t, cmd, ". /tmp/workspace/.env &&")
+	cmd := buildScanContextCommand("/sandbox/workspace/repo", traceID)
+	assert.Contains(t, cmd, ". /sandbox/workspace/.env &&")
 	assert.Contains(t, cmd, "FULLSEND_TRACE_ID='"+traceID+"'")
 	assert.Contains(t, cmd, "-exec fullsend scan context")
 }
@@ -1026,4 +1075,67 @@ func TestOpenTeeReader_FileCompleteOnParserError(t *testing.T) {
 	fileData, err := os.ReadFile(outPath)
 	require.NoError(t, err)
 	assert.Equal(t, content, string(fileData), "file should contain all bytes including post-error drain")
+}
+
+func TestPRHeadSHAFromEventPath_WithSHA(t *testing.T) {
+	// Simulate a workflow_dispatch event file where the nested event_payload
+	// contains pull_request.head.sha.
+	eventJSON := `{
+		"inputs": {
+			"event_payload": "{\"pull_request\":{\"number\":42,\"head\":{\"ref\":\"feature\",\"sha\":\"abc123def\",\"repo\":{\"full_name\":\"org/repo\"}}}}"
+		}
+	}`
+	f := filepath.Join(t.TempDir(), "event.json")
+	require.NoError(t, os.WriteFile(f, []byte(eventJSON), 0o644))
+
+	got := prHeadSHAFromEventPath(f)
+	assert.Equal(t, "abc123def", got)
+}
+
+func TestPRHeadSHAFromEventPath_WithoutSHA(t *testing.T) {
+	// Event payload has pull_request but no head.sha — should return empty.
+	eventJSON := `{
+		"inputs": {
+			"event_payload": "{\"pull_request\":{\"number\":42,\"head\":{\"ref\":\"feature\",\"repo\":{\"full_name\":\"org/repo\"}}}}"
+		}
+	}`
+	f := filepath.Join(t.TempDir(), "event.json")
+	require.NoError(t, os.WriteFile(f, []byte(eventJSON), 0o644))
+
+	got := prHeadSHAFromEventPath(f)
+	assert.Empty(t, got)
+}
+
+func TestPRHeadSHAFromEventPath_NoPullRequest(t *testing.T) {
+	// Issue-only event — no pull_request in the payload.
+	eventJSON := `{
+		"inputs": {
+			"event_payload": "{\"issue\":{\"number\":99}}"
+		}
+	}`
+	f := filepath.Join(t.TempDir(), "event.json")
+	require.NoError(t, os.WriteFile(f, []byte(eventJSON), 0o644))
+
+	got := prHeadSHAFromEventPath(f)
+	assert.Empty(t, got)
+}
+
+func TestPRHeadSHAFromEventPath_EmptyPath(t *testing.T) {
+	got := prHeadSHAFromEventPath("")
+	assert.Empty(t, got)
+}
+
+func TestPRHeadSHAFromEventPath_MissingFile(t *testing.T) {
+	got := prHeadSHAFromEventPath("/nonexistent/path/event.json")
+	assert.Empty(t, got)
+}
+
+func TestPRHeadSHAFromEventPath_NoInputs(t *testing.T) {
+	// Direct event (not workflow_dispatch) — no inputs field.
+	eventJSON := `{"action": "opened", "pull_request": {"number": 1}}`
+	f := filepath.Join(t.TempDir(), "event.json")
+	require.NoError(t, os.WriteFile(f, []byte(eventJSON), 0o644))
+
+	got := prHeadSHAFromEventPath(f)
+	assert.Empty(t, got)
 }

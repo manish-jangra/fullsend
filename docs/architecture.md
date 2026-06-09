@@ -118,7 +118,7 @@ Identity is not the same as trust. An agent's identity lets it authenticate to e
 **Decided:**
 
 - Credential delivery model: four tiers — (1) prefetch + post-process for agents with enumerable inputs (zero credential access), (2) OpenShell providers + L7 egress policies for static token auth (credentials never enter sandbox), (3) host-side REST server for request-body credential injection or response transformation, (4) host files + L7 policies for complex auth requiring in-sandbox credential files. L7 policies enforce both method + path and binary-level restrictions. Providers are preferred over REST servers when viable ([ADR 0017](ADRs/0017-credential-isolation-for-sandboxed-agents.md), extended by [ADR 0025](ADRs/0025-provider-credential-delivery-for-sandboxed-agents.md)).
-- Per-role GitHub Apps with manifest-based creation. Each agent role gets its own app with scoped permissions. PEMs stored in Secret Manager as `fullsend-{org}--{role}-app-pem` — org-scoped naming so each org's PEMs are isolated within the shared GCP project ([ADR 0007](ADRs/0007-per-role-github-apps.md)).
+- Per-role GitHub Apps with manifest-based creation. Each agent role gets its own app with scoped permissions. PEMs stored in Secret Manager as `fullsend-{role}-app-pem` — one secret per role, shared across orgs on a mint. Org isolation is enforced via `ALLOWED_ORGS`, `ROLE_APP_IDS`, and installation verification ([ADR 0007](ADRs/0007-per-role-github-apps.md), [ADR 0033](ADRs/0033-per-repo-installation-mode.md)).
 
 One concrete implementation option is [`oidcx`](https://github.com/oxidecomputer/oidcx): a service that accepts OIDC identity tokens and exchanges them for short-lived access tokens. It can mint tokens scoped to selected GitHub repositories and permissions, or to selected Oxide silos and permissions, and it also ships with a GitHub Action wrapper. In a Fullsend deployment, this can be used by the sandbox entrypoint to narrow a broad GitHub App identity down to only the specific permissions an agent needs for the current run.
 
@@ -556,10 +556,10 @@ GitHub event ──► SHIM WORKFLOW (fullsend.yml in enrolled repo)
                  ║ │ │                                                       │ │ ║
                  ║ │ │ Created with --from image, --policy code.yaml.        │ │ ║
                  ║ │ │ Bootstrapped via openshell upload/exec:               │ │ ║
-                 ║ │ │   agent def    → /tmp/claude-config/agents/           │ │ ║
-                 ║ │ │   skills       → /tmp/claude-config/skills/           │ │ ║
+                 ║ │ │   agent def    → /sandbox/claude-config/agents/       │ │ ║
+                 ║ │ │   skills       → /sandbox/claude-config/skills/       │ │ ║
                  ║ │ │   .env, host files (GCP creds), security hooks        │ │ ║
-                 ║ │ │   target repo  → /tmp/workspace/target-repo/          │ │ ║
+                 ║ │ │   target repo  → /sandbox/workspace/target-repo/      │ │ ║
                  ║ │ │                                                       │ │ ║
                  ║ │ │ Network policy enforced (L7, per-binary):             │ │ ║
                  ║ │ │   Vertex AI     → claude, node only                   │ │ ║
@@ -585,7 +585,7 @@ GitHub event ──► SHIM WORKFLOW (fullsend.yml in enrolled repo)
                  ║ │ └───────────────────────────────────────────────────────┘ │ ║
                  ║ │                                                           │ ║
                  ║ │ Extracts from destroyed sandbox:                          │ ║
-                 ║ │   /tmp/workspace/output/, JSONL transcripts,              │ ║
+                 ║ │   /sandbox/workspace/output/, JSONL transcripts,          │ ║
                  ║ │   rsync repo back (--no-links, exclude .git/hooks/)       │ ║
                  ║ │                                                           │ ║
                  ║ │ Post-agent secret scan (redact from extracted output).    │ ║

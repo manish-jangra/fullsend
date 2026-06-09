@@ -35,7 +35,7 @@ pre_script: scripts/pre-code.sh
 post_script: scripts/post-code.sh
 host_files:
   - src: env/gcp-vertex.env
-    dest: /tmp/workspace/.env.d/gcp-vertex.env
+    dest: /sandbox/workspace/.env.d/gcp-vertex.env
 ```
 
 Resolution logic (`internal/harness/harness.go`):

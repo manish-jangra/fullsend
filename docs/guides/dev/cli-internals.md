@@ -39,6 +39,8 @@ fullsend
 │   ├── --no-post-script                     #   Skip post-script execution
 │   ├── --debug [filter]                     #   Enable Claude Code debug logging
 │   ├── --offline                            #   Reject network fetches
+│   ├── --max-depth <int>                    #   Max transitive dependency depth (0 disables)
+│   ├── --max-resources <int>                #   Max total remote resources per harness
 │   ├── --run-url <url>                      #   CI/CD run URL for status comments
 │   ├── --status-repo <owner/repo>           #   Repository for status comments
 │   ├── --status-number <int>                #   Issue/PR number for status comments
@@ -59,7 +61,7 @@ The `admin install` command performs all setup in a single invocation. The `mint
 | `admin install` Phase | Standalone Command | Required Access |
 |-----------------------|--------------------|-----------------|
 | Phases 1-3: Mint deployment | `fullsend mint deploy` | GCP project (mint): `roles/iam.serviceAccountAdmin`, `roles/iam.workloadIdentityPoolAdmin`, `roles/cloudfunctions.developer`, `roles/run.admin`; with `--pem-dir` also `roles/secretmanager.admin`, `roles/resourcemanager.projectIamAdmin` |
-| Phases 1-3: Mint enrollment | `fullsend mint enroll` | GCP project (mint): `roles/secretmanager.admin`, `roles/cloudfunctions.viewer`, `roles/run.admin`, `roles/iam.workloadIdentityPoolAdmin`; per-repo mode also needs `roles/resourcemanager.projectIamAdmin` |
+| Phases 1-3: Mint enrollment | `fullsend mint enroll` | GCP project (mint): `roles/cloudfunctions.viewer`, `roles/run.admin`, `roles/iam.workloadIdentityPoolAdmin`; per-repo mode also needs `roles/resourcemanager.projectIamAdmin` |
 | Phase 4: WIF provisioning | `fullsend inference provision` | GCP project (inference): `roles/iam.workloadIdentityPoolAdmin`, `roles/resourcemanager.projectIamAdmin` |
 | Phases 5-7: GitHub setup + enrollment | `fullsend github setup` | GitHub only |
 
@@ -270,7 +272,7 @@ Per-repo mode does not use the layer stack — it runs the same phases inline in
 │  ┌──────────────────────────────────────────┐                   │
 │  │ bootstrapSandbox()                       │                   │
 │  │                                          │                   │
-│  │  Upload to /tmp/workspace:               │                   │
+│  │  Upload to /sandbox/workspace:           │                   │
 │  │  ├── fullsend binary (cross-compiled)    │                   │
 │  │  ├── agent definition file               │                   │
 │  │  ├── skills/ directory                   │                   │
@@ -280,8 +282,8 @@ Per-repo mode does not use the layer stack — it runs the same phases inline in
 │  │  └── security hooks                      │                   │
 │  │                                          │                   │
 │  │  bootstrapEnv() writes:                  │                   │
-│  │  ├── PATH=/tmp/workspace/bin:$PATH       │                   │
-│  │  ├── CLAUDE_CONFIG_DIR=/tmp/claude-config│                   │
+│  │  ├── PATH=/sandbox/workspace/bin:$PATH   │                   │
+│  │  ├── CLAUDE_CONFIG_DIR=/sandbox/claude-config│               │
 │  │  ├── FULLSEND_OUTPUT_DIR=...             │                   │
 │  │  └── sources .env.d/*.env files          │                   │
 │  └──────────┬───────────────────────────────┘                   │
@@ -342,8 +344,8 @@ Per-repo mode does not use the layer stack — it runs the same phases inline in
 ### Sandbox Constants
 
 ```go
-SandboxWorkspace    = "/tmp/workspace"
-SandboxClaudeConfig = "/tmp/claude-config"
+SandboxWorkspace    = "/sandbox/workspace"
+SandboxClaudeConfig = "/sandbox/claude-config"
 ```
 
 ### Key Sandbox Operations
