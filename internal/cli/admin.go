@@ -1696,7 +1696,6 @@ func runUninstall(ctx context.Context, client forge.Client, printer *ui.Printer,
 	}
 
 	// Build a minimal stack for uninstall.
-	// Only ConfigRepoLayer matters for uninstall since other layers are no-ops.
 	emptyCfg := config.NewOrgConfig(nil, nil, nil, nil, "")
 	stack := layers.NewStack(
 		layers.NewConfigRepoLayer(org, client, emptyCfg, printer, false),
