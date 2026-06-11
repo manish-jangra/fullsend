@@ -96,6 +96,17 @@ run_case() {
 write_pr "MEMBER" '[]'
 run_case "trusted member author" "true" "trusted_author" "false"
 
+export PR_AUTHOR_ASSOCIATION="MEMBER"
+write_pr "NONE" '[]'
+run_case "event payload trusted author overrides API NONE" "true" "trusted_author" "false"
+if grep -q '/pulls/' "${GH_LOG}"; then
+  echo "FAIL: trusted event payload should not call pulls API"
+  FAILURES=$((FAILURES + 1))
+else
+  echo "PASS: trusted event payload skips pulls API"
+fi
+unset PR_AUTHOR_ASSOCIATION
+
 write_pr "OWNER" '[]'
 run_case "trusted owner author" "true" "trusted_author" "false"
 
