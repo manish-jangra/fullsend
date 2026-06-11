@@ -58,7 +58,7 @@ runs:
         REASON: ${{ steps.check.outputs.reason }}
         LABEL_REMOVED: ${{ steps.check.outputs.label_removed }}
         DOCS_URL: ${{ inputs.docs_url }}
-        BOT_LOGIN: ${{ github.actor }}
+        BOT_LOGIN: github-actions[bot]
       run: |
         set -euo pipefail
 
@@ -117,7 +117,7 @@ runs:
         GH_TOKEN: ${{ github.token }}
         REPOSITORY: ${{ inputs.repository }}
         PR_NUMBER: ${{ inputs.pr_number }}
-        BOT_LOGIN: ${{ github.actor }}
+        BOT_LOGIN: github-actions[bot]
       run: |
         set -euo pipefail
 

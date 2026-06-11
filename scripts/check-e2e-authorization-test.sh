@@ -170,7 +170,7 @@ export PR_UPDATED_AT="2026-06-01T10:00:00Z"
 write_pr "NONE" '[{"name":"ok-to-test"}]'
 write_events '[]'
 export GH_FAIL="true"
-run_case "gh api failure on events returns error reason" "false" "error" "false"
+run_case "gh api failure on pull fetch returns error reason" "false" "error" "false"
 export GH_FAIL="false"
 
 if [[ "${FAILURES}" -gt 0 ]]; then
